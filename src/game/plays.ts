@@ -75,8 +75,10 @@ export const OFFENSE_PLAYS: OffensePlay[] = [
 ];
 
 export const DEFENSE_PLAYS: DefensePlay[] = [
-  { id: "cover2", name: "COVER 2", blitz: 0.15, man: 0.25 },
-  { id: "man", name: "MAN PRESS", blitz: 0.3, man: 0.85 },
-  { id: "blitz", name: "ALL-OUT BLITZ", blitz: 0.95, man: 0.6 },
-  { id: "prevent", name: "PREVENT", blitz: 0.0, man: 0.1 },
+  { id: "cover2", name: "COVER 2 ZONE", coverage: "zone", blitz: 0.1 },
+  { id: "cover3", name: "COVER 3 ZONE", coverage: "zone", blitz: 0.2 },
+  { id: "man", name: "MAN PRESS", coverage: "man", blitz: 0.25, press: 0.9 },
+  { id: "zoneblitz", name: "ZONE BLITZ", coverage: "zone", blitz: 0.75 },
+  { id: "blitz", name: "ALL-OUT BLITZ", coverage: "man", blitz: 1.0, press: 0.7 },
+  { id: "prevent", name: "PREVENT", coverage: "zone", blitz: 0.0 },
 ];

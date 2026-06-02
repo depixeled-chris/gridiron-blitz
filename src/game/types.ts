@@ -39,10 +39,11 @@ export interface OffensePlay {
 export interface DefensePlay {
   id: string;
   name: string;
-  /** how aggressively front seven rushes the passer (0..1) */
+  coverage: "man" | "zone";
+  /** how aggressively the front seven rushes the passer (0..1) */
   blitz: number;
-  /** how tightly DBs play receivers (0 = zone/loose, 1 = press/man) */
-  man: number;
+  /** press/jam tightness for man, 0..1 (ignored for zone) */
+  press?: number;
 }
 
 export interface Player {
@@ -68,6 +69,8 @@ export interface Player {
   oy: number;
   /** defender this player (OL) is blocking, or assignment for a DB */
   assignId?: string;
+  /** zone landmark (yards from LOS / midfield) for zone coverage */
+  zone?: { fwd: number; lat: number };
   /** brief stun after a juke/block */
   stun: number;
   blocked: boolean;

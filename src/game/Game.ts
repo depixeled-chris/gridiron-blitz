@@ -22,6 +22,7 @@ import {
   YARD,
 } from "./constants";
 import { Input } from "./input";
+import { Sfx } from "./audio";
 import { DEFENSE_PLAYS, OFFENSE_PLAYS } from "./plays";
 import type {
   BallState,
@@ -45,27 +46,47 @@ interface FormSpot {
   assign?: string; // slot id a DB covers
 }
 
+// 11-man offense: 5 OL + FB block, QB, RB, 2 WR, TE. Route keys A/B/C/R map
+// the four eligible receivers to throw buttons 1-4.
 const OFF_FORM: FormSpot[] = [
   { slot: "QB", role: "QB", fwd: -3, lat: 0, num: 7 },
   { slot: "R", role: "RB", fwd: -3, lat: 3, num: 28, target: "4" },
-  { slot: "OL1", role: "OL", fwd: -0.5, lat: -2, num: 71 },
-  { slot: "OL2", role: "OL", fwd: -0.5, lat: 0, num: 55 },
-  { slot: "OL3", role: "OL", fwd: -0.5, lat: 2, num: 74 },
-  { slot: "A", role: "WR", fwd: -0.5, lat: -9, num: 80, target: "1" },
-  { slot: "B", role: "WR", fwd: -0.5, lat: 9, num: 88, target: "2" },
-  { slot: "C", role: "TE", fwd: -0.5, lat: 4, num: 84, target: "3" },
+  { slot: "LT", role: "OL", fwd: -0.5, lat: -3, num: 73 },
+  { slot: "LG", role: "OL", fwd: -0.5, lat: -1.5, num: 66 },
+  { slot: "CEN", role: "OL", fwd: -0.5, lat: 0, num: 55 },
+  { slot: "RG", role: "OL", fwd: -0.5, lat: 1.5, num: 67 },
+  { slot: "RT", role: "OL", fwd: -0.5, lat: 3, num: 76 },
+  { slot: "F", role: "OL", fwd: -1.8, lat: -2, num: 44 }, // fullback / lead blocker
+  { slot: "A", role: "WR", fwd: -0.5, lat: -10, num: 80, target: "1" },
+  { slot: "B", role: "WR", fwd: -0.5, lat: 10, num: 88, target: "2" },
+  { slot: "C", role: "TE", fwd: -0.5, lat: 5, num: 84, target: "3" },
 ];
 
+// 11-man defense: 4-3 with 4 DBs. CBs/SS/FS take the eligible receivers in man.
 const DEF_FORM: FormSpot[] = [
-  { slot: "DL1", role: "DL", fwd: 1, lat: -2, num: 99 },
-  { slot: "DL2", role: "DL", fwd: 1, lat: 0, num: 90 },
-  { slot: "DL3", role: "DL", fwd: 1, lat: 2, num: 93 },
-  { slot: "LB1", role: "LB", fwd: 4, lat: -4, num: 54 },
-  { slot: "LB2", role: "LB", fwd: 4, lat: 4, num: 52 },
-  { slot: "CB1", role: "DB", fwd: 6, lat: -9, num: 24, assign: "A" },
-  { slot: "CB2", role: "DB", fwd: 6, lat: 9, num: 21, assign: "B" },
-  { slot: "S", role: "DB", fwd: 11, lat: 0, num: 31, assign: "C" },
+  { slot: "LE", role: "DL", fwd: 1, lat: -3.5, num: 91 },
+  { slot: "DT", role: "DL", fwd: 1, lat: -1.2, num: 94 },
+  { slot: "NT", role: "DL", fwd: 1, lat: 1.2, num: 98 },
+  { slot: "RE", role: "DL", fwd: 1, lat: 3.5, num: 56 },
+  { slot: "WLB", role: "LB", fwd: 4, lat: -6, num: 54 },
+  { slot: "MLB", role: "LB", fwd: 4.5, lat: 0, num: 52 },
+  { slot: "SLB", role: "LB", fwd: 4, lat: 6, num: 58 },
+  { slot: "CB1", role: "DB", fwd: 6, lat: -10, num: 24, assign: "A" },
+  { slot: "CB2", role: "DB", fwd: 6, lat: 10, num: 21, assign: "B" },
+  { slot: "SS", role: "DB", fwd: 9, lat: 6, num: 33, assign: "C" },
+  { slot: "FS", role: "DB", fwd: 12, lat: -3, num: 31, assign: "R" },
 ];
+
+// zone landmarks per defensive slot (yards downfield from LOS, lateral from mid)
+const ZONE: Record<string, { fwd: number; lat: number }> = {
+  CB1: { fwd: 7, lat: -11 },
+  CB2: { fwd: 7, lat: 11 },
+  SS: { fwd: 13, lat: 7 },
+  FS: { fwd: 16, lat: -5 },
+  WLB: { fwd: 7, lat: -7 },
+  MLB: { fwd: 9, lat: 0 },
+  SLB: { fwd: 7, lat: 7 },
+};
 
 const TARGET_KEYS: Record<string, string> = {
   Digit1: "1",
@@ -93,6 +114,7 @@ export class Game {
   private players: Player[] = [];
   private ball: BallState = freshBall();
   private input = new Input();
+  private audio = new Sfx();
 
   // game state
   private phase: Phase = "menu";
@@ -114,6 +136,7 @@ export class Game {
   private snapTimer = 0;
   private throwTimer = 0; // AI QB drop timer
   private switchCooldown = 0;
+  private rushers = new Set<string>(); // defenders rushing the passer this play
   private lastHud = "";
 
   private hudCb: ((h: HudState) => void) | null = null;
@@ -152,7 +175,13 @@ export class Game {
   }
 
   // ---- public controls (from React) -------------------------------------
+  setMuted(m: boolean) {
+    this.audio.muted = m;
+  }
+
   startGame() {
+    this.audio.resume();
+    this.audio.select();
     this.score = { home: 0, away: 0 };
     this.quarter = 1;
     this.clock = QUARTER_SECONDS;
@@ -165,6 +194,8 @@ export class Game {
   /** React calls this when the user picks a play card */
   choosePlay(id: string) {
     if (this.phase !== "playcall") return;
+    this.audio.resume();
+    this.audio.select();
     if (this.userOnOffense()) {
       this.offPlay = OFFENSE_PLAYS.find((p) => p.id === id) ?? OFFENSE_PLAYS[0];
       this.defPlay = pick(DEFENSE_PLAYS);
@@ -181,6 +212,20 @@ export class Game {
 
   userOnOffense() {
     return this.possession === this.userTeam;
+  }
+
+  /** dev/debug snapshot of all players (used by smoke tests) */
+  debugPlayers() {
+    return this.players.map((p) => ({
+      id: p.id,
+      team: p.team,
+      role: p.role,
+      x: p.x,
+      y: p.y,
+    }));
+  }
+  debugPhase() {
+    return this.phase;
   }
 
   // ---- touch input bridge (called from React on-screen controls) --------
@@ -255,6 +300,7 @@ export class Game {
       p.x = p.ox;
       p.y = p.oy;
       if (f.assign) p.assignId = idOf(offTeam, f.assign);
+      if (ZONE[f.slot]) p.zone = ZONE[f.slot];
       this.players.push(p);
     }
 
@@ -277,13 +323,27 @@ export class Game {
     if (this.userOnOffense()) {
       this.controlledId = idOf(offTeam, "QB");
     } else {
-      this.controlledId = idOf(defTeam, "LB2");
+      this.controlledId = idOf(defTeam, "MLB");
     }
     this.setControlFlags();
+
+    // decide the pass rush once per play (DL always rush; LBs per blitz rate)
+    this.rushers.clear();
+    for (const p of this.players) {
+      if (p.team !== defTeam) continue;
+      if (p.role === "DL") this.rushers.add(p.id);
+      else if (p.role === "LB" && rng() < this.defPlay.blitz) this.rushers.add(p.id);
+    }
+    // all-out blitz: send a safety too
+    if (this.defPlay.blitz >= 1) {
+      const ss = this.byId(idOf(defTeam, "SS"));
+      if (ss) this.rushers.add(ss.id);
+    }
   }
 
   private snap() {
     this.phase = "live";
+    this.audio.snap();
     this.throwTimer = 0;
     const offTeam = this.possession;
     const ball = this.ball;
@@ -344,7 +404,16 @@ export class Game {
     this.updateDefense(dt);
     this.updateBall(dt);
     this.integrate(dt);
+    this.separate();
+    this.clampPositions();
     this.checkTackleAndScore();
+  }
+
+  private clampPositions() {
+    for (const p of this.players) {
+      p.x = clamp(p.x, 6, WORLD_W - 6);
+      p.y = clamp(p.y, SIDELINE, WORLD_H - SIDELINE);
+    }
   }
 
   // ---- offense AI / control ---------------------------------------------
@@ -461,42 +530,125 @@ export class Game {
         continue;
       }
 
-      const blitzer =
-        p.role === "DL" || (p.role === "LB" && this.defPlay.blitz > rng());
+      const rushing = this.rushers.has(p.id);
 
       if (qbHasBall && !this.ball.inAir) {
-        if (blitzer) {
-          this.moveToward(p, carrier!.x, carrier!.y, dt, p.blocked ? 0.5 : 1);
+        if (rushing) {
+          const to = this.intercept(p, carrier!);
+          this.moveToward(p, to.x, to.y, dt, p.blocked ? 0.45 : 1);
+        } else if (this.defPlay.coverage === "man") {
+          this.coverMan(p, dt);
         } else {
-          // cover assigned receiver, with cushion toward own goal
-          const cover = p.assignId ? this.byId(p.assignId) : null;
-          if (cover) {
-            const dir = this.offDir();
-            const cushion = this.defPlay.man > 0.5 ? 0.5 : 2.5;
-            this.moveToward(
-              p,
-              cover.x + dir * cushion * YARD,
-              cover.y,
-              dt,
-              0.96
-            );
-          } else {
-            this.moveToward(p, carrier!.x, carrier!.y, dt, 0.9);
-          }
+          this.coverZone(p, dt);
         }
+      } else if (this.ball.inAir) {
+        // break on the ball
+        this.moveToward(p, this.ball.tx, this.ball.ty, dt, 1);
+      } else if (carrier) {
+        // ball is being carried (run, scramble, or after the catch): pursue
+        const to = this.intercept(p, carrier);
+        this.moveToward(p, to.x, to.y, dt, p.blocked ? 0.5 : 1);
       } else {
-        // pursue the ball / carrier with a small lead
-        const lead = this.leadPoint(p, target);
-        this.moveToward(p, lead.x, lead.y, dt, p.blocked ? 0.5 : 1);
+        this.moveToward(p, target.x, target.y, dt, 0.9);
       }
     }
   }
 
-  private leadPoint(p: Player, target: { x: number; y: number }) {
-    const c = this.carrier();
-    if (!c) return target;
-    const t = clamp(dist(p.x, p.y, c.x, c.y) / (SPEED.DB * YARD), 0, 0.5);
+  /** aim where the carrier WILL be, given pursuer speed (pure-pursuit lead) */
+  private intercept(p: Player, c: Player) {
+    const sp = Math.max(this.pps(p), 1);
+    let t = dist(p.x, p.y, c.x, c.y) / sp;
+    for (let i = 0; i < 3; i++) {
+      const px = c.x + c.vx * t;
+      const py = c.y + c.vy * t;
+      t = dist(p.x, p.y, px, py) / sp;
+    }
+    t = Math.min(t, 0.9);
     return { x: c.x + c.vx * t, y: c.y + c.vy * t };
+  }
+
+  private eligibleReceivers(): Player[] {
+    const offTeam = this.possession;
+    return this.players.filter((q) => q.team === offTeam && !!q.target);
+  }
+
+  private coverMan(p: Player, dt: number) {
+    const cover = p.assignId ? this.byId(p.assignId) : null;
+    const carrier = this.carrier();
+    if (!cover) {
+      // unassigned defender (a non-rushing LB) robs the short middle
+      if (carrier) this.moveToward(p, carrier.x, carrier.y, dt, 0.7);
+      return;
+    }
+    const dir = this.offDir();
+    const press = this.defPlay.press ?? 0.6;
+    const cushion = lerp(2.4, 0.4, press); // yards on the goal side of the WR
+    const aim = this.intercept(p, cover);
+    this.moveToward(p, aim.x + dir * cushion * YARD, aim.y, dt, 0.99);
+  }
+
+  private coverZone(p: Player, dt: number) {
+    const lm = p.zone;
+    const carrier = this.carrier();
+    if (!lm) {
+      if (carrier) this.moveToward(p, carrier.x, carrier.y, dt, 0.7);
+      return;
+    }
+    const dir = this.offDir();
+    const zx = this.los + dir * lm.fwd * YARD;
+    const zy = clamp(WORLD_H / 2 + lm.lat * YARD, SIDELINE, WORLD_H - SIDELINE);
+    // jump the nearest receiver threatening this zone
+    let tgt: Player | null = null;
+    let bd = 4.8 * YARD;
+    for (const r of this.eligibleReceivers()) {
+      const d = dist(zx, zy, r.x, r.y);
+      if (d < bd) {
+        bd = d;
+        tgt = r;
+      }
+    }
+    if (tgt) {
+      const aim = this.intercept(p, tgt);
+      this.moveToward(p, aim.x, aim.y, dt, 0.99);
+    } else {
+      this.moveToward(p, zx, zy, dt, 0.9);
+    }
+  }
+
+  /** push apart same-team players so they fan out instead of stacking */
+  private separate() {
+    const MIN = 1.3 * YARD;
+    const ps = this.players;
+    for (let i = 0; i < ps.length; i++) {
+      for (let j = i + 1; j < ps.length; j++) {
+        const a = ps[i];
+        const b = ps[j];
+        if (a.team !== b.team) continue;
+        let dx = a.x - b.x;
+        let dy = a.y - b.y;
+        let d = Math.hypot(dx, dy);
+        if (d >= MIN) continue;
+        if (d < 1e-3) {
+          dx = (i % 2 ? 1 : -1) * 0.5;
+          dy = 0.5;
+          d = Math.hypot(dx, dy);
+        }
+        const push = (MIN - d) / 2;
+        const nx = (dx / d) * push;
+        const ny = (dy / d) * push;
+        // don't shove the ball carrier or the user's player — others go around
+        const aLock = a.id === this.ball.carrier || (a.controlled && this.userOnOffense());
+        const bLock = b.id === this.ball.carrier || (b.controlled && this.userOnOffense());
+        if (!aLock) {
+          a.x += nx;
+          a.y += ny;
+        }
+        if (!bLock) {
+          b.x -= nx;
+          b.y -= ny;
+        }
+      }
+    }
   }
 
   private switchDefender() {
@@ -600,6 +752,7 @@ export class Game {
     b.arc = clamp(dist(qb.x, qb.y, r.x, r.y) * 0.12, 16, 60);
     b.t = 0;
     this.message = "";
+    this.audio.throw();
   }
 
   // ---- ball update -------------------------------------------------------
@@ -680,6 +833,7 @@ export class Game {
       this.setControlFlags();
     }
     this.message = "CAUGHT!";
+    this.audio.catchBall();
   }
 
   private incomplete() {
@@ -692,6 +846,7 @@ export class Game {
     this.ball.inAir = false;
     this.ball.targetId = null;
     this.message = "INTERCEPTED!";
+    this.audio.turnover();
     this.endPlay({ type: "turnover", spotX: by.x, by });
   }
 
@@ -728,7 +883,7 @@ export class Game {
           c.id === this.controlledId &&
           this.userOnOffense() &&
           this.input.turbo() &&
-          rng() < 0.18
+          rng() < 0.12
         ) {
           p.x -= (p.x - c.x) * 0.5;
           p.y -= (p.y - c.y) * 0.5;
@@ -739,6 +894,7 @@ export class Game {
           this.safety();
           return;
         }
+        this.audio.tackle();
         this.endPlay({ type: "tackle", spotX: c.x, spotY: c.y });
         return;
       }
@@ -806,6 +962,7 @@ export class Game {
     if (this.phase !== "live") return;
     this.phase = "dead";
     this.deadTimer = 1.4;
+    this.audio.whistle();
     const dir = this.offDir();
 
     if (res.type === "turnover") {
@@ -834,8 +991,10 @@ export class Game {
       this.down = 1;
       this.toGo = 10;
       this.recomputeFirstDown();
-      if (res.type !== "incomplete")
+      if (res.type !== "incomplete") {
         this.message = `+${gainYds} • FIRST DOWN`;
+        this.audio.firstDown();
+      }
     } else {
       this.down++;
       this.toGo = Math.max(
@@ -862,6 +1021,8 @@ export class Game {
     this.deadTimer = 2.0;
     this.score[this.possession] += 7;
     this.message = "TOUCHDOWN!";
+    this.audio.whistle();
+    this.audio.touchdown();
     this.pendingKickoff = true;
   }
 
@@ -871,6 +1032,8 @@ export class Game {
     const def: Team = this.possession === "home" ? "away" : "home";
     this.score[def] += 2;
     this.message = "SAFETY!";
+    this.audio.whistle();
+    this.audio.turnover();
     this.pendingKickoff = true;
     // after a safety, the team that conceded kicks; possession flips
     this.possession = def;

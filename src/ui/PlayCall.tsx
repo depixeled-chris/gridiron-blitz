@@ -45,7 +45,8 @@ export function PlayCall({
 function kindLabel(p: AnyPlay, offense: boolean) {
   if (offense) return (p as OffensePlay).kind === "run" ? "RUN" : "PASS";
   const d = p as DefensePlay;
-  return d.blitz > 0.6 ? "BLITZ" : d.man > 0.6 ? "MAN" : "ZONE";
+  if (d.blitz >= 0.7) return "BLITZ";
+  return d.coverage === "man" ? "MAN" : "ZONE";
 }
 
 /** tiny diagram of routes / scheme */
@@ -104,7 +105,9 @@ function PlayArt({ play, offense }: { play: AnyPlay; offense: boolean }) {
       {[-22, 22].map((dx, i) => (
         <circle key={i} cx={cx + dx} cy={los - 26} r="3" fill="#ff7a7a" />
       ))}
-      {dp.man < 0.4 && <circle cx={cx} cy={14} r="3" fill="#ff7a7a" />}
+      {dp.coverage === "zone" && (
+        <circle cx={cx} cy={14} r="3" fill="#ff7a7a" />
+      )}
     </svg>
   );
 }

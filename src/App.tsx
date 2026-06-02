@@ -37,6 +37,7 @@ export function App() {
   const stageRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Game | null>(null);
   const [hud, setHud] = useState<HudState>(EMPTY);
+  const [muted, setMuted] = useState(false);
 
   useEffect(() => {
     const game = new Game();
@@ -46,6 +47,9 @@ export function App() {
     game.mount(mountRef.current!).then(() => {
       if (!alive) game.destroy();
     });
+    if (import.meta.env.DEV) {
+      (window as unknown as { __game: Game }).__game = game;
+    }
     return () => {
       alive = false;
       game.destroy();
@@ -79,6 +83,17 @@ export function App() {
           {hud.message && hud.phase !== "menu" && hud.phase !== "gameover" && (
             <div className="toast">{hud.message}</div>
           )}
+          <button
+            className="mute-btn"
+            title={muted ? "Unmute" : "Mute"}
+            onClick={() => {
+              const m = !muted;
+              setMuted(m);
+              game?.setMuted(m);
+            }}
+          >
+            {muted ? "🔇" : "🔊"}
+          </button>
         </div>
         <Controls hud={hud} touch={IS_TOUCH} />
       </div>

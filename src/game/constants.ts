@@ -16,7 +16,7 @@ export const SIDELINE = 1 * YARD; // keep players this far inside top/bottom
 export const LEFT_GOAL = ENDZONE * YARD; // 220 — away attacks here
 export const RIGHT_GOAL = (ENDZONE + FIELD_YARDS) * YARD; // 2420 — home attacks here
 
-export const TACKLE_R = 0.85 * YARD;
+export const TACKLE_R = 0.95 * YARD;
 export const CATCH_R = 1.3 * YARD;
 export const BLOCK_R = 1.1 * YARD;
 
