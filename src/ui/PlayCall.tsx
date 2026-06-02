@@ -10,7 +10,7 @@ import type {
 type AnyFormation = OffenseFormation | DefenseFormation;
 type AnyPlay = OffensePlay | DefensePlay;
 
-const PLAYS_PER_PAGE = 3;
+const PLAYS_PER_PAGE = 6;
 
 export function PlayCall({
   formations,
