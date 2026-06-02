@@ -92,9 +92,9 @@ export function App() {
         {hud.phase === "menu" && <Menu onStart={() => game?.startGame()} />}
         {hud.phase === "playcall" && game && (
           <PlayCall
-            plays={game.availablePlays()}
+            formations={game.availableFormations()}
             onOffense={hud.userOnOffense}
-            onPick={(id) => game.choosePlay(id)}
+            onPick={(fid, pid) => game.choosePlay(fid, pid)}
           />
         )}
         {hud.phase === "gameover" && (

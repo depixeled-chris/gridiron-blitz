@@ -29,7 +29,7 @@ export interface RouteNode {
 export interface OffensePlay {
   id: string;
   name: string;
-  kind: "run" | "pass";
+  kind: "run" | "pass" | "fg" | "punt";
   /** which skill player carries on a run play */
   runner?: "RB" | "QB";
   /** route per receiver slot, keyed by player id suffix */
@@ -44,6 +44,28 @@ export interface DefensePlay {
   blitz: number;
   /** press/jam tightness for man, 0..1 (ignored for zone) */
   press?: number;
+}
+
+/** per-slot alignment override (yards) applied on top of the base formation */
+export interface AlignOverride {
+  fwd?: number;
+  lat?: number;
+}
+
+export interface OffenseFormation {
+  id: string;
+  name: string;
+  tag: string;
+  align?: Record<string, AlignOverride>;
+  plays: OffensePlay[];
+}
+
+export interface DefenseFormation {
+  id: string;
+  name: string;
+  tag: string;
+  align?: Record<string, AlignOverride>;
+  plays: DefensePlay[];
 }
 
 export interface Player {

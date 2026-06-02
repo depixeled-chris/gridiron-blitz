@@ -281,34 +281,64 @@ body {
   margin: 4px 0 26px;
 }
 
-/* ---- play call ---- */
+/* ---- play call (sized with vh so it always fits the screen) ---- */
 .playcall {
   background: rgba(6, 10, 20, 0.9);
 }
 .pc-title {
-  font-size: 22px;
+  font-size: clamp(15px, 4vh, 22px);
   font-weight: 800;
-  letter-spacing: 4px;
-  margin-bottom: 18px;
+  letter-spacing: 3px;
+  margin-bottom: clamp(8px, 2.4vh, 16px);
   color: var(--gold);
+}
+.pc-title.sm {
+  margin: 0;
+  letter-spacing: 2px;
+}
+.pc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: min(560px, 94vw);
+  margin-bottom: clamp(6px, 1.8vh, 12px);
+}
+.pc-back,
+.pc-spacer {
+  flex: 1 1 0;
+}
+.pc-back {
+  text-align: left;
+  background: none;
+  border: none;
+  color: #8fb8ff;
+  font-weight: 800;
+  letter-spacing: 1px;
+  font-size: clamp(11px, 2.4vh, 14px);
+  cursor: pointer;
+  padding: 4px 0;
+}
+.pc-title.sm {
+  flex: 0 0 auto;
 }
 .pc-grid {
   display: grid;
-  grid-template-columns: repeat(3, 168px);
-  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(6px, 1.6vh, 12px);
+  width: min(560px, 94vw);
 }
 .pc-card {
   position: relative;
   background: linear-gradient(180deg, #18233f, #0f1830);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 12px 12px 14px;
+  border-radius: 10px;
+  padding: clamp(6px, 1.4vh, 11px);
   cursor: pointer;
   color: #eef2fb;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: clamp(2px, 0.8vh, 5px);
   transition: transform 0.08s, border-color 0.08s, box-shadow 0.08s;
 }
 .pc-card:hover {
@@ -316,42 +346,69 @@ body {
   border-color: var(--gold);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
+.pc-card.form {
+  border-color: #2c4170;
+}
 .pc-key {
   position: absolute;
-  top: 6px;
-  left: 8px;
+  top: 5px;
+  left: 6px;
   font-family: monospace;
   font-weight: 800;
-  font-size: 12px;
+  font-size: 11px;
   color: #0a0e1a;
   background: var(--gold);
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border-radius: 4px;
   display: grid;
   place-items: center;
 }
 .pc-art {
-  width: 120px;
-  height: 80px;
+  width: 100%;
+  height: min(78px, 15vh);
   background: #0c1426;
   border-radius: 6px;
 }
 .pc-name {
   font-weight: 800;
   letter-spacing: 1px;
-  font-size: 14px;
+  font-size: clamp(11px, 2.5vh, 14px);
 }
 .pc-kind {
-  font-size: 11px;
+  font-size: clamp(8px, 1.9vh, 11px);
   letter-spacing: 2px;
   color: #8aa0c8;
 }
 .pc-hint {
-  margin-top: 18px;
+  margin-top: clamp(8px, 2vh, 16px);
   color: #8aa0c8;
-  font-size: 13px;
+  font-size: clamp(10px, 2.2vh, 13px);
   letter-spacing: 1px;
+}
+.pc-pager {
+  margin-top: clamp(8px, 2vh, 14px);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: #cdd9f0;
+  font-size: clamp(11px, 2.3vh, 13px);
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.pc-pager button {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #18233f;
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+}
+.pc-pager button:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 /* ---- controls bar (desktop hint overlay) ---- */

@@ -1,35 +1,103 @@
-import { useEffect } from "react";
-import type { DefensePlay, OffensePlay } from "../game/types";
+import { useEffect, useState } from "react";
+import type {
+  DefenseFormation,
+  DefensePlay,
+  OffenseFormation,
+  OffensePlay,
+} from "../game/types";
 
+type AnyFormation = OffenseFormation | DefenseFormation;
 type AnyPlay = OffensePlay | DefensePlay;
 
+const PLAYS_PER_PAGE = 4;
+
 export function PlayCall({
-  plays,
+  formations,
   onOffense,
   onPick,
 }: {
-  plays: AnyPlay[];
+  formations: AnyFormation[];
   onOffense: boolean;
-  onPick: (id: string) => void;
+  onPick: (formationId: string, playId: string) => void;
 }) {
-  // keyboard 1..n picks a play
+  const [formationId, setFormationId] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+
+  const formation = formations.find((f) => f.id === formationId) ?? null;
+  const plays = formation ? (formation.plays as AnyPlay[]) : [];
+  const pageCount = Math.max(1, Math.ceil(plays.length / PLAYS_PER_PAGE));
+  const pagePlays = plays.slice(page * PLAYS_PER_PAGE, page * PLAYS_PER_PAGE + PLAYS_PER_PAGE);
+
+  const back = () => {
+    setFormationId(null);
+    setPage(0);
+  };
+
+  // keyboard: 1..n selects, Backspace/Esc goes back, [ ] page
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      const i = parseInt(e.key, 10);
-      if (!isNaN(i) && i >= 1 && i <= plays.length) onPick(plays[i - 1].id);
+      if (e.key === "Escape" || e.key === "Backspace") {
+        if (formation) back();
+        return;
+      }
+      if (!formation) {
+        const i = parseInt(e.key, 10);
+        if (i >= 1 && i <= formations.length) setFormationId(formations[i - 1].id);
+      } else {
+        if (e.key === "[" && page > 0) setPage(page - 1);
+        if (e.key === "]" && page < pageCount - 1) setPage(page + 1);
+        const i = parseInt(e.key, 10);
+        if (i >= 1 && i <= pagePlays.length) onPick(formation.id, pagePlays[i - 1].id);
+      }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [plays, onPick]);
+  }, [formation, formations, page, pageCount, pagePlays, onPick]);
+
+  if (!formation) {
+    return (
+      <div className="overlay playcall">
+        <div className="pc-title">
+          {onOffense ? "CHOOSE FORMATION" : "CHOOSE DEFENSE"}
+        </div>
+        <div className="pc-grid">
+          {formations.map((f, i) => (
+            <button
+              key={f.id}
+              className="pc-card form"
+              onClick={() => {
+                setFormationId(f.id);
+                setPage(0);
+              }}
+            >
+              <span className="pc-key">{i + 1}</span>
+              <FormationArt formation={f} offense={onOffense} />
+              <span className="pc-name">{f.name}</span>
+              <span className="pc-kind">{f.tag}</span>
+            </button>
+          ))}
+        </div>
+        <div className="pc-hint">Tap a formation · then pick a play</div>
+      </div>
+    );
+  }
 
   return (
     <div className="overlay playcall">
-      <div className="pc-title">
-        {onOffense ? "PICK YOUR PLAY" : "PICK YOUR DEFENSE"}
+      <div className="pc-head">
+        <button className="pc-back" onClick={back}>
+          ‹ FORMATIONS
+        </button>
+        <div className="pc-title sm">{formation.name}</div>
+        <div className="pc-spacer" />
       </div>
       <div className="pc-grid">
-        {plays.map((p, i) => (
-          <button key={p.id} className="pc-card" onClick={() => onPick(p.id)}>
+        {pagePlays.map((p, i) => (
+          <button
+            key={p.id}
+            className="pc-card"
+            onClick={() => onPick(formation.id, p.id)}
+          >
             <span className="pc-key">{i + 1}</span>
             <PlayArt play={p} offense={onOffense} />
             <span className="pc-name">{p.name}</span>
@@ -37,19 +105,77 @@ export function PlayCall({
           </button>
         ))}
       </div>
-      <div className="pc-hint">Click a card or press its number</div>
+      {pageCount > 1 ? (
+        <div className="pc-pager">
+          <button disabled={page === 0} onClick={() => setPage(page - 1)}>
+            ‹
+          </button>
+          <span>
+            PAGE {page + 1} / {pageCount}
+          </span>
+          <button
+            disabled={page === pageCount - 1}
+            onClick={() => setPage(page + 1)}
+          >
+            ›
+          </button>
+        </div>
+      ) : (
+        <div className="pc-hint">Tap a play to run it</div>
+      )}
     </div>
   );
 }
 
 function kindLabel(p: AnyPlay, offense: boolean) {
-  if (offense) return (p as OffensePlay).kind === "run" ? "RUN" : "PASS";
+  if (offense) {
+    const k = (p as OffensePlay).kind;
+    return k === "run" ? "RUN" : k === "pass" ? "PASS" : k.toUpperCase();
+  }
   const d = p as DefensePlay;
   if (d.blitz >= 0.7) return "BLITZ";
   return d.coverage === "man" ? "MAN" : "ZONE";
 }
 
-/** tiny diagram of routes / scheme */
+function FormationArt({
+  formation,
+  offense,
+}: {
+  formation: AnyFormation;
+  offense: boolean;
+}) {
+  const W = 120;
+  const H = 80;
+  const los = H * 0.6;
+  const color = offense ? "#8fb8ff" : "#ff7a7a";
+  // crude alignment dots from the formation override (or a default spread)
+  const align = formation.align ?? {};
+  const dots = offense
+    ? [
+        ["A", -34],
+        ["C", 16],
+        ["B", 34],
+        ["R", 8],
+        ["QB", 0],
+      ]
+    : [];
+  return (
+    <svg className="pc-art" viewBox={`0 0 ${W} ${H}`}>
+      <line x1="6" y1={los} x2={W - 6} y2={los} stroke={offense ? "#7fd49a" : "#e09a9a"} strokeWidth="1" />
+      {offense
+        ? dots.map(([slot, dx]) => {
+            const ov = align[slot as string];
+            const x = W / 2 + (Number(dx) + (ov?.lat ?? 0) * 2);
+            const y = los - (ov?.fwd != null ? ov.fwd * -2 : slot === "QB" ? -14 : slot === "R" ? -16 : 0);
+            return <circle key={slot as string} cx={x} cy={y} r="3.4" fill={color} />;
+          })
+        : [-30, -10, 10, 30].map((dx, i) => (
+            <circle key={i} cx={W / 2 + dx} cy={los - 8} r="3.4" fill={color} />
+          ))}
+    </svg>
+  );
+}
+
 function PlayArt({ play, offense }: { play: AnyPlay; offense: boolean }) {
   const W = 120;
   const H = 80;
@@ -57,25 +183,48 @@ function PlayArt({ play, offense }: { play: AnyPlay; offense: boolean }) {
   const los = H * 0.62;
   if (offense) {
     const op = play as OffensePlay;
+    if (op.kind === "fg" || op.kind === "punt") {
+      return (
+        <svg className="pc-art" viewBox={`0 0 ${W} ${H}`}>
+          <line x1="6" y1={los} x2={W - 6} y2={los} stroke="#7fd49a" strokeWidth="1" />
+          <path
+            d={`M ${cx} ${los + 8} Q ${cx + 20} ${los - 40} ${W - 16} 14`}
+            fill="none"
+            stroke="#ffd34d"
+            strokeWidth="1.8"
+            strokeDasharray="3 3"
+          />
+          {op.kind === "fg" && (
+            <g stroke="#fff" strokeWidth="2">
+              <line x1={W - 22} y1="6" x2={W - 22} y2="26" />
+              <line x1={W - 12} y1="6" x2={W - 12} y2="26" />
+              <line x1={W - 27} y1="16" x2={W - 7} y2="16" />
+            </g>
+          )}
+          <ellipse cx={cx} cy={los + 9} rx="3.5" ry="2.4" fill="#7a4012" />
+        </svg>
+      );
+    }
     return (
       <svg className="pc-art" viewBox={`0 0 ${W} ${H}`}>
         <line x1="6" y1={los} x2={W - 6} y2={los} stroke="#7fd49a" strokeWidth="1" />
-        {Object.entries(op.routes).map(([slot, nodes], idx) => {
+        {Object.entries(op.routes).map(([slot, nodes]) => {
+          if (!nodes.length) return null;
           const start = slotStart(slot, W, los);
           let d = `M ${start.x} ${start.y}`;
           let px = start.x;
           let py = start.y;
           for (const n of nodes) {
-            px = start.x + n.lat * 3.2;
-            py = start.y - n.fwd * 2.0;
+            px = start.x + n.lat * 3.0;
+            py = start.y - n.fwd * 1.9;
             d += ` L ${px} ${py}`;
           }
           const color = op.kind === "run" && slot === "R" ? "#ffd34d" : "#8fb8ff";
           return (
             <g key={slot}>
               <path d={d} fill="none" stroke={color} strokeWidth="1.6" />
-              <circle cx={start.x} cy={start.y} r="2.4" fill="#fff" />
-              {idx >= 0 && <circle cx={px} cy={py} r="1.6" fill={color} />}
+              <circle cx={start.x} cy={start.y} r="2.2" fill="#fff" />
+              <circle cx={px} cy={py} r="1.6" fill={color} />
             </g>
           );
         })}
@@ -91,23 +240,14 @@ function PlayArt({ play, offense }: { play: AnyPlay; offense: boolean }) {
         <g key={i}>
           <circle cx={cx + dx} cy={los - 8} r="3" fill="#e23b3b" />
           {dp.blitz > 0.5 && (
-            <line
-              x1={cx + dx}
-              y1={los - 8}
-              x2={cx + dx}
-              y2={los + 10}
-              stroke="#ffd34d"
-              strokeWidth="1.4"
-            />
+            <line x1={cx + dx} y1={los - 8} x2={cx + dx} y2={los + 10} stroke="#ffd34d" strokeWidth="1.4" />
           )}
         </g>
       ))}
       {[-22, 22].map((dx, i) => (
         <circle key={i} cx={cx + dx} cy={los - 26} r="3" fill="#ff7a7a" />
       ))}
-      {dp.coverage === "zone" && (
-        <circle cx={cx} cy={14} r="3" fill="#ff7a7a" />
-      )}
+      {dp.coverage === "zone" && <circle cx={cx} cy={14} r="3" fill="#ff7a7a" />}
     </svg>
   );
 }

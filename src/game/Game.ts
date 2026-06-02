@@ -27,11 +27,13 @@ import {
 } from "./constants";
 import { Input } from "./input";
 import { Sfx } from "./audio";
-import { DEFENSE_PLAYS, OFFENSE_PLAYS } from "./plays";
+import { DEFENSE_FORMATIONS, OFFENSE_FORMATIONS } from "./plays";
 import type {
   BallState,
+  DefenseFormation,
   DefensePlay,
   HudState,
+  OffenseFormation,
   OffensePlay,
   Phase,
   Player,
@@ -133,8 +135,12 @@ export class Game {
   private score: Record<Team, number> = { home: 0, away: 0 };
   private message = "";
   private controlledId = "";
-  private offPlay: OffensePlay = OFFENSE_PLAYS[0];
-  private defPlay: DefensePlay = DEFENSE_PLAYS[0];
+  private offFormation: OffenseFormation = OFFENSE_FORMATIONS[0];
+  private defFormation: DefenseFormation = DEFENSE_FORMATIONS[0];
+  private offPlay: OffensePlay = OFFENSE_FORMATIONS[0].plays[0];
+  private defPlay: DefensePlay = DEFENSE_FORMATIONS[0].plays[0];
+  private kickMode: "fg" | "punt" | null = null;
+  private kickGood = false;
   private camX = 0;
   private host: HTMLElement | null = null;
   private viewW = VIEW_W;
@@ -221,17 +227,31 @@ export class Game {
     this.goToPlaycall();
   }
 
-  /** React calls this when the user picks a play card */
-  choosePlay(id: string) {
+  /** React calls this when the user picks a play (formation + play). */
+  choosePlay(formationId: string, playId: string) {
     if (this.phase !== "playcall") return;
     this.audio.resume();
     this.audio.select();
     if (this.userOnOffense()) {
-      this.offPlay = OFFENSE_PLAYS.find((p) => p.id === id) ?? OFFENSE_PLAYS[0];
-      this.defPlay = pick(DEFENSE_PLAYS);
+      const f =
+        OFFENSE_FORMATIONS.find((x) => x.id === formationId) ??
+        OFFENSE_FORMATIONS[0];
+      this.offFormation = f;
+      this.offPlay = f.plays.find((p) => p.id === playId) ?? f.plays[0];
+      // AI defense answers with a random front + call
+      this.defFormation = pick(DEFENSE_FORMATIONS);
+      this.defPlay = pick(this.defFormation.plays);
     } else {
-      this.defPlay = DEFENSE_PLAYS.find((p) => p.id === id) ?? DEFENSE_PLAYS[0];
-      this.offPlay = pick(OFFENSE_PLAYS);
+      const f =
+        DEFENSE_FORMATIONS.find((x) => x.id === formationId) ??
+        DEFENSE_FORMATIONS[0];
+      this.defFormation = f;
+      this.defPlay = f.plays.find((p) => p.id === playId) ?? f.plays[0];
+      // AI offense never punts/kicks — exclude special teams
+      this.offFormation = pick(
+        OFFENSE_FORMATIONS.filter((x) => x.id !== "special")
+      );
+      this.offPlay = pick(this.offFormation.plays);
     }
     this.setupFormation();
     this.phase = "presnap";
@@ -281,8 +301,8 @@ export class Game {
     this.input.virtualPress(code);
   }
 
-  availablePlays() {
-    return this.userOnOffense() ? OFFENSE_PLAYS : DEFENSE_PLAYS;
+  availableFormations() {
+    return this.userOnOffense() ? OFFENSE_FORMATIONS : DEFENSE_FORMATIONS;
   }
 
   // ---- series / down management -----------------------------------------
@@ -326,10 +346,16 @@ export class Game {
 
     const idOf = (team: Team, slot: string) => `${team}_${slot}`;
 
+    const offAlign = this.offFormation.align ?? {};
+    const defAlign = this.defFormation.align ?? {};
+
     for (const f of OFF_FORM) {
       const p: Player = basePlayer(idOf(offTeam, f.slot), offTeam, f);
-      p.ox = clamp(this.los + dir * f.fwd * YARD, LEFT_GOAL - 40, RIGHT_GOAL + 40);
-      p.oy = clamp(midY + f.lat * YARD, SIDELINE, WORLD_H - SIDELINE);
+      const ov = offAlign[f.slot];
+      const fwd = ov?.fwd ?? f.fwd;
+      const lat = ov?.lat ?? f.lat;
+      p.ox = clamp(this.los + dir * fwd * YARD, LEFT_GOAL - 40, RIGHT_GOAL + 40);
+      p.oy = clamp(midY + lat * YARD, SIDELINE, WORLD_H - SIDELINE);
       p.x = p.ox;
       p.y = p.oy;
       p.target = f.target;
@@ -337,8 +363,11 @@ export class Game {
     }
     for (const f of DEF_FORM) {
       const p: Player = basePlayer(idOf(defTeam, f.slot), defTeam, f);
-      p.ox = clamp(this.los + dir * f.fwd * YARD, LEFT_GOAL - 40, RIGHT_GOAL + 40);
-      p.oy = clamp(midY + f.lat * YARD, SIDELINE, WORLD_H - SIDELINE);
+      const ov = defAlign[f.slot];
+      const fwd = ov?.fwd ?? f.fwd;
+      const lat = ov?.lat ?? f.lat;
+      p.ox = clamp(this.los + dir * fwd * YARD, LEFT_GOAL - 40, RIGHT_GOAL + 40);
+      p.oy = clamp(midY + lat * YARD, SIDELINE, WORLD_H - SIDELINE);
       p.x = p.ox;
       p.y = p.oy;
       if (f.assign) p.assignId = idOf(offTeam, f.assign);
@@ -385,10 +414,17 @@ export class Game {
 
   private snap() {
     this.phase = "live";
-    this.audio.snap();
     this.throwTimer = 0;
+    this.kickMode = null;
     const offTeam = this.possession;
     const ball = this.ball;
+
+    if (this.offPlay.kind === "fg" || this.offPlay.kind === "punt") {
+      this.startKick(this.offPlay.kind);
+      return;
+    }
+
+    this.audio.snap();
     if (this.offPlay.kind === "run") {
       const runnerSlot = this.offPlay.runner === "QB" ? "QB" : "R";
       const runner = this.byId(`${offTeam}_${runnerSlot}`)!;
@@ -403,6 +439,100 @@ export class Game {
     }
     this.setControlFlags();
     this.message = "";
+  }
+
+  // ---- special teams -----------------------------------------------------
+  private startKick(kind: "fg" | "punt") {
+    const dir = this.offDir();
+    const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
+    const b = this.ball;
+    b.carrier = null;
+    b.inAir = true;
+    b.targetId = null;
+    b.sx = this.los - dir * 7 * YARD; // snap back to the kicker/punter
+    b.sy = WORLD_H / 2;
+    b.x = b.sx;
+    b.y = b.sy;
+    b.z = 0;
+    b.t = 0;
+    b.elapsed = 0;
+    this.kickMode = kind;
+    this.audio.kick();
+
+    if (kind === "fg") {
+      // distance to the posts (back of end zone = +10 from goal line)
+      const yds = Math.abs(goalX - b.sx) / YARD + 10;
+      this.kickGood = yds <= 52 && rng() < this.fgProb(yds);
+      b.tx = goalX + dir * (this.kickGood ? 14 * YARD : 2 * YARD);
+      b.ty = WORLD_H / 2 + (this.kickGood ? 0 : (rng() - 0.5) * 8 * YARD);
+      b.peak = 3.2 * YARD;
+      b.ftime = Math.max(0.7, (Math.abs(b.tx - b.sx) / PASS_SPEED) * 1.1);
+      this.message = "FIELD GOAL…";
+    } else {
+      // punt: 38-46 yards of hang, with a touchback if it reaches the end zone
+      const puntYds = 38 + rng() * 8;
+      let landX = b.sx + dir * puntYds * YARD;
+      if (dir > 0 ? landX >= goalX : landX <= goalX) landX = goalX; // touchback
+      b.tx = landX;
+      b.ty = WORLD_H / 2 + (rng() - 0.5) * 6 * YARD;
+      b.peak = 3.6 * YARD;
+      b.ftime = Math.max(0.9, (Math.abs(b.tx - b.sx) / PASS_SPEED) * 1.3);
+      this.message = "PUNT…";
+    }
+  }
+
+  private fgProb(yds: number) {
+    if (yds <= 25) return 0.97;
+    if (yds <= 35) return 0.88;
+    if (yds <= 43) return 0.72;
+    if (yds <= 48) return 0.55;
+    return 0.38;
+  }
+
+  private updateKick(dt: number) {
+    const b = this.ball;
+    b.elapsed += dt;
+    b.t = clamp(b.elapsed / b.ftime, 0, 1);
+    b.x = lerp(b.sx, b.tx, b.t);
+    b.y = lerp(b.sy, b.ty, b.t);
+    b.z = b.peak * Math.sin(Math.PI * b.t);
+    if (b.t < 1) return;
+    b.inAir = false;
+    b.z = 0;
+    const kind = this.kickMode;
+    this.kickMode = null;
+    if (kind === "fg") this.resolveFieldGoal();
+    else this.resolvePunt();
+  }
+
+  private resolveFieldGoal() {
+    this.phase = "dead";
+    this.deadTimer = 1.8;
+    this.audio.whistle();
+    if (this.kickGood) {
+      this.score[this.possession] += 3;
+      this.message = "FIELD GOAL IS GOOD! +3";
+      this.audio.firstDown();
+      this.pendingKickoff = true;
+    } else {
+      this.message = "NO GOOD";
+      this.audio.turnover();
+      // opponent takes over at the spot of the kick
+      this.flipPossession(this.los);
+    }
+  }
+
+  private resolvePunt() {
+    this.phase = "dead";
+    this.deadTimer = 1.6;
+    this.audio.whistle();
+    const dir = this.offDir();
+    const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
+    let spot = this.ball.x;
+    // touchback to the opponent's own 20
+    if (dir > 0 ? spot >= goalX : spot <= goalX) spot = goalX - dir * 20 * YARD;
+    this.message = "PUNT";
+    this.flipPossession(spot);
   }
 
   // ---- main loop ---------------------------------------------------------
@@ -891,6 +1021,10 @@ export class Game {
   // ---- ball update -------------------------------------------------------
   private updateBall(dt: number) {
     const b = this.ball;
+    if (this.kickMode) {
+      this.updateKick(dt);
+      return;
+    }
     if (!b.inAir) {
       const c = this.carrier();
       if (c) {

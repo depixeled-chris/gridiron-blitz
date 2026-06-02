@@ -84,6 +84,11 @@ export class Sfx {
     if (!this.ctx) return;
     this.noise(this.t, 0.18, 0.22, 1200, 0.8);
   }
+  kick() {
+    if (!this.ctx) return;
+    this.tone(120, this.t, 0.14, "sawtooth", 0.35, 60);
+    this.noise(this.t, 0.1, 0.4, 500, 0.5);
+  }
   catchBall() {
     if (!this.ctx) return;
     this.tone(660, this.t, 0.1, "triangle", 0.3, 990);
