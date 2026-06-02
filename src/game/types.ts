@@ -120,6 +120,8 @@ export interface BallState {
   targetId: string | null;
   /** apex height added by the arc (px) */
   peak: number;
+  /** true while the ball is a live loose ball after a tip — anyone can grab it */
+  tip: boolean;
 }
 
 export interface HudState {

@@ -4,6 +4,7 @@ import {
   BLOCKED_REACH,
   CATCH_R,
   COLORS,
+  DEFLECT_R,
   ENDZONE,
   FIELD_YARDS,
   INT_CHANCE,
@@ -16,6 +17,7 @@ import {
   SIDELINE,
   SPEED,
   TACKLE_R,
+  TIP_CHANCE,
   TURBO,
   VIEW_H,
   VIEW_W,
@@ -392,6 +394,8 @@ export class Game {
 
     // build sprites
     for (const p of this.players) this.makeSprite(p);
+    // keep the ball drawn on top of every player sprite
+    this.world.addChild(this.ballGfx);
 
     // initial control: user controls QB (or runner) on offense, a LB on defense
     if (this.userOnOffense()) {
@@ -608,9 +612,10 @@ export class Game {
         continue;
       }
 
-      // ball in the air: the target drives to the landing spot, others block
+      // ball in the air: target drives to the spot; on a tip everyone attacks
+      // the loose ball; otherwise receivers keep running their routes
       if (ballLoose) {
-        if (p.id === this.ball.targetId) {
+        if (this.ball.tip || p.id === this.ball.targetId) {
           this.moveToward(p, this.ball.tx, this.ball.ty, dt, 1);
         } else if (p.route && p.routeIdx < p.route.length) {
           this.followRoute(p, dt);
@@ -1008,10 +1013,11 @@ export class Game {
     b.ty = landY;
     b.t = 0;
     b.elapsed = 0;
+    b.tip = false;
     const throwDist = dist(qb.x, qb.y, landX, landY);
-    b.ftime = Math.max(0.28, throwDist / PASS_SPEED);
-    // longer throws arc higher; this is what lets the ball clear the rush
-    b.peak = clamp(throwDist * 0.16, 1.0 * YARD, 3.2 * YARD);
+    b.ftime = Math.max(0.32, throwDist / PASS_SPEED);
+    // every throw arcs enough to clear underneath defenders; long balls higher
+    b.peak = clamp(throwDist * 0.18, 1.7 * YARD, 3.4 * YARD);
     // hand control of the target to the user so they can adjust to the ball
     if (this.userOnOffense()) {
       this.controlledId = receiverId;
@@ -1043,24 +1049,34 @@ export class Game {
     // ground position travels in a straight line start -> landing spot
     b.x = lerp(b.sx, b.tx, b.t);
     b.y = lerp(b.sy, b.ty, b.t);
+
+    if (b.tip) {
+      // loose ball after a tip: low pop-up arc, anyone can grab it
+      b.z = b.peak * Math.sin(Math.PI * b.t);
+      this.resolveLoose();
+      if (this.ball.inAir && b.t >= 1) this.incomplete(); // hit the turf
+      return;
+    }
+
     // height follows a parabolic arc: rises off the QB's hand, drops to the catch
     b.z = lerp(Z_RELEASE, Z_CATCH, b.t) + b.peak * Math.sin(Math.PI * b.t);
 
-    // anyone whose ground position is under the ball AND who can reach its
-    // current height may play it. Near the QB the ball is low (rusher can swat);
-    // over the middle it's high (clears engaged/short defenders); descending into
-    // the receiver it's catchable again.
+    // A defender can only play the ball when he's almost directly under it AND
+    // it's within his reach. The arc keeps it high over the middle, so only a
+    // rusher right at the release or a defender at the catch point can touch it.
     const offTeam = this.possession;
-    // defenders first — a defender in reach swats or picks it
     for (const p of this.players) {
       if (p.team === offTeam) continue;
-      if (dist(p.x, p.y, b.x, b.y) > CATCH_R) continue;
+      if (dist(p.x, p.y, b.x, b.y) > DEFLECT_R) continue;
       const reach = p.blocked ? BLOCKED_REACH : REACH;
       if (b.z > reach) continue;
-      if (rng() < INT_CHANCE) return this.interception(p);
-      return this.batDown(p);
+      const roll = rng();
+      if (roll < INT_CHANCE) return this.interception(p);
+      if (roll < INT_CHANCE + (1 - INT_CHANCE) * TIP_CHANCE)
+        return this.startTip(p);
+      return this.batDown();
     }
-    // then eligible receivers — a receiver in reach catches it
+    // eligible receivers — a receiver in reach catches it
     for (const p of this.players) {
       if (p.team !== offTeam || !p.target) continue;
       if (dist(p.x, p.y, b.x, b.y) > CATCH_R) continue;
@@ -1068,17 +1084,56 @@ export class Game {
       return this.completePass(p);
     }
 
-    if (b.t >= 1) this.incomplete(); // hit the turf, nobody there
+    if (b.t >= 1) this.incomplete(); // overthrown — hit the turf
+  }
+
+  /** a deflected ball is live: the closest player under it (either team) grabs it */
+  private resolveLoose() {
+    const b = this.ball;
+    // let it pop up first so the tipper can't instantly re-grab it
+    if (b.t < 0.35) return;
+    let best: Player | null = null;
+    let bd = CATCH_R;
+    for (const p of this.players) {
+      const d = dist(p.x, p.y, b.x, b.y);
+      if (d < bd && b.z <= REACH) {
+        bd = d;
+        best = p;
+      }
+    }
+    if (!best) return;
+    if (best.team === this.possession) this.completePass(best);
+    else this.interception(best);
+  }
+
+  /** deflect the ball up into a live loose ball near the defender */
+  private startTip(by: Player) {
+    const b = this.ball;
+    b.tip = true;
+    b.targetId = null;
+    b.sx = b.x;
+    b.sy = b.y;
+    // pops up and falls a couple of yards off the deflection
+    b.tx = clamp(b.x + (rng() - 0.5) * 4 * YARD, LEFT_GOAL, RIGHT_GOAL);
+    b.ty = clamp(b.y + (rng() - 0.5) * 4 * YARD, SIDELINE, WORLD_H - SIDELINE);
+    b.peak = 1.4 * YARD;
+    b.ftime = 0.6;
+    b.elapsed = 0;
+    b.t = 0;
+    this.message = "TIPPED!";
+    this.audio.tackle();
+    void by;
   }
 
   private completePass(r: Player) {
     const b = this.ball;
     b.inAir = false;
+    b.tip = false;
     b.targetId = null;
     b.z = 0;
     r.hasBall = true;
     b.carrier = r.id;
-    if (this.userOnOffense()) {
+    if (r.team === this.possession && this.userOnOffense()) {
       this.controlledId = r.id;
       this.setControlFlags();
     }
@@ -1086,21 +1141,23 @@ export class Game {
     this.audio.catchBall();
   }
 
-  /** ball batted down at the line / in coverage — incomplete at that spot */
-  private batDown(by: Player) {
-    void by;
+  /** ball batted straight to the turf — incomplete */
+  private batDown() {
     this.ball.z = 0;
+    this.audio.tackle();
     this.incomplete();
   }
 
   private incomplete() {
     this.ball.inAir = false;
+    this.ball.tip = false;
     this.ball.targetId = null;
     this.endPlay({ type: "incomplete" });
   }
 
   private interception(by: Player) {
     this.ball.inAir = false;
+    this.ball.tip = false;
     this.ball.targetId = null;
     this.ball.z = 0;
     this.message = "INTERCEPTED!";
@@ -1381,13 +1438,17 @@ export class Game {
     const g = this.ballGfx;
     g.clear();
     const b = this.ball;
-    if (b.inAir) {
+    const aloft = b.inAir || this.kickMode !== null;
+    if (aloft) {
       // ground shadow tracks the true landing path; shrinks/fades as it rises
-      const f = clamp(1 - b.z / (7 * YARD), 0.35, 1);
-      g.ellipse(b.x, b.y, 7 * f, 3.5 * f).fill({ color: 0x000000, alpha: 0.3 * f });
+      const f = clamp(1 - b.z / (7 * YARD), 0.3, 1);
+      g.ellipse(b.x, b.y, 8 * f, 4 * f).fill({ color: 0x000000, alpha: 0.32 * f });
       const sy = b.y - b.z; // lift the ball up by its height
-      g.ellipse(b.x, sy, 6, 4).fill(COLORS.ball);
-      g.ellipse(b.x, sy, 6, 4).stroke({ width: 1, color: 0xffffff, alpha: 0.6 });
+      // bigger, brighter ball so the flight reads clearly
+      g.ellipse(b.x, sy, 8, 5).fill(COLORS.ball);
+      g.ellipse(b.x, sy, 8, 5).stroke({ width: 1.5, color: 0xffffff, alpha: 0.95 });
+      // laces
+      g.moveTo(b.x - 3, sy).lineTo(b.x + 3, sy).stroke({ width: 1, color: 0xffffff, alpha: 0.9 });
     } else {
       g.ellipse(b.x, b.y, 6, 4).fill(COLORS.ball);
       g.ellipse(b.x, b.y, 6, 4).stroke({ width: 1, color: 0xffffff, alpha: 0.5 });
@@ -1613,6 +1674,7 @@ function freshBall(): BallState {
     ty: 0,
     targetId: null,
     peak: 0,
+    tip: false,
   };
 }
 
