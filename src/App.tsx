@@ -8,6 +8,7 @@ import { GameOver } from "./ui/GameOver";
 import { Controls } from "./ui/Controls";
 import { TouchControls } from "./ui/TouchControls";
 import { InstallBanner } from "./ui/InstallBanner";
+import { onViewportChange } from "./viewport";
 
 const EMPTY: HudState = {
   phase: "menu",
@@ -46,12 +47,15 @@ export function App() {
     let alive = true;
     game.mount(mountRef.current!).then(() => {
       if (!alive) game.destroy();
+      else game.resize();
     });
     if (import.meta.env.DEV) {
       (window as unknown as { __game: Game }).__game = game;
     }
+    const offViewport = onViewportChange(() => game.resize());
     return () => {
       alive = false;
+      offViewport();
       game.destroy();
       gameRef.current = null;
     };

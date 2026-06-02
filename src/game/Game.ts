@@ -167,13 +167,11 @@ export class Game {
     this.layout();
     this.input.attach();
 
-    window.addEventListener("resize", this.onResize);
-    window.addEventListener("orientationchange", this.onResize);
     this.app.ticker.add((t) => this.update(t.deltaMS / 1000));
   }
 
-  /** size the renderer to the host element and scale the field to fill it */
-  private onResize = () => {
+  /** resize the renderer to the host element (driven by the viewport module) */
+  resize = () => {
     if (!this.app || !this.host) return;
     const w = this.host.clientWidth || VIEW_W;
     const h = this.host.clientHeight || VIEW_H;
@@ -193,8 +191,6 @@ export class Game {
 
   destroy() {
     this.input.detach();
-    window.removeEventListener("resize", this.onResize);
-    window.removeEventListener("orientationchange", this.onResize);
     this.app?.destroy(true, { children: true });
     this.sprites.clear();
   }
