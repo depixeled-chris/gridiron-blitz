@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { DEFENSE_BASE, OFFENSE_BASE } from "../game/plays";
 import type {
   DefenseFormation,
   DefensePlay,
@@ -146,32 +147,50 @@ function FormationArt({
 }) {
   const W = 120;
   const H = 80;
-  const los = H * 0.6;
-  const color = offense ? "#8fb8ff" : "#ff7a7a";
-  // crude alignment dots from the formation override (or a default spread)
+  const pad = 13;
+  const base = offense ? OFFENSE_BASE : DEFENSE_BASE;
   const align = formation.align ?? {};
-  const dots = offense
-    ? [
-        ["A", -34],
-        ["C", 16],
-        ["B", 34],
-        ["R", 8],
-        ["QB", 0],
-      ]
-    : [];
+
+  // effective position per player: x = lateral, y = up means downfield
+  const pts = Object.keys(base).map((slot) => {
+    const ov = align[slot];
+    return {
+      slot,
+      px: ov?.lat ?? base[slot].lat,
+      py: -(ov?.fwd ?? base[slot].fwd),
+    };
+  });
+
+  // auto-fit the whole formation into the box (independent x/y scale)
+  const xs = pts.map((p) => p.px);
+  const ys = pts.map((p) => p.py);
+  const minX = Math.min(...xs) - 1.5;
+  const maxX = Math.max(...xs) + 1.5;
+  const minY = Math.min(...ys) - 1.5;
+  const maxY = Math.max(...ys) + 1.5;
+  const sx = (W - 2 * pad) / Math.max(0.1, maxX - minX);
+  const sy = (H - 2 * pad) / Math.max(0.1, maxY - minY);
+  const color = offense ? "#8fb8ff" : "#ff7a7a";
+  const ballSlot = offense ? "QB" : "MLB";
+
   return (
     <svg className="pc-art" viewBox={`0 0 ${W} ${H}`}>
-      <line x1="6" y1={los} x2={W - 6} y2={los} stroke={offense ? "#7fd49a" : "#e09a9a"} strokeWidth="1" />
-      {offense
-        ? dots.map(([slot, dx]) => {
-            const ov = align[slot as string];
-            const x = W / 2 + (Number(dx) + (ov?.lat ?? 0) * 2);
-            const y = los - (ov?.fwd != null ? ov.fwd * -2 : slot === "QB" ? -14 : slot === "R" ? -16 : 0);
-            return <circle key={slot as string} cx={x} cy={y} r="3.4" fill={color} />;
-          })
-        : [-30, -10, 10, 30].map((dx, i) => (
-            <circle key={i} cx={W / 2 + dx} cy={los - 8} r="3.4" fill={color} />
-          ))}
+      {pts.map((p) => {
+        const X = pad + (p.px - minX) * sx;
+        const Y = pad + (p.py - minY) * sy;
+        const ball = p.slot === ballSlot;
+        return (
+          <circle
+            key={p.slot}
+            cx={X}
+            cy={Y}
+            r={ball ? 3.4 : 2.9}
+            fill={ball ? "#fff" : color}
+            stroke={ball ? color : "none"}
+            strokeWidth={ball ? 1.4 : 0}
+          />
+        );
+      })}
     </svg>
   );
 }

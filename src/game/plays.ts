@@ -4,6 +4,36 @@ import type {
   OffensePlay,
 } from "./types";
 
+// Base pre-snap alignment (yards: fwd = downfield, lat = toward bottom sideline).
+// Single source of truth shared by the engine and the formation diagrams.
+export const OFFENSE_BASE: Record<string, { fwd: number; lat: number }> = {
+  QB: { fwd: -3, lat: 0 },
+  R: { fwd: -3, lat: 3 },
+  LT: { fwd: -0.5, lat: -3 },
+  LG: { fwd: -0.5, lat: -1.5 },
+  CEN: { fwd: -0.5, lat: 0 },
+  RG: { fwd: -0.5, lat: 1.5 },
+  RT: { fwd: -0.5, lat: 3 },
+  F: { fwd: -1.8, lat: -2 },
+  A: { fwd: -0.5, lat: -10 },
+  B: { fwd: -0.5, lat: 10 },
+  C: { fwd: -0.5, lat: 5 },
+};
+
+export const DEFENSE_BASE: Record<string, { fwd: number; lat: number }> = {
+  LE: { fwd: 1, lat: -3.5 },
+  DT: { fwd: 1, lat: -1.2 },
+  NT: { fwd: 1, lat: 1.2 },
+  RE: { fwd: 1, lat: 3.5 },
+  WLB: { fwd: 4, lat: -6 },
+  MLB: { fwd: 4.5, lat: 0 },
+  SLB: { fwd: 4, lat: 6 },
+  CB1: { fwd: 6, lat: -10 },
+  CB2: { fwd: 6, lat: 10 },
+  SS: { fwd: 9, lat: 6 },
+  FS: { fwd: 12, lat: -3 },
+};
+
 // Receiver slots: A = WR top, B = WR bottom, C = TE, R = RB (swing).
 // Routes are lists of {fwd, lat} waypoints in yards from the player's snap spot.
 

@@ -27,7 +27,12 @@ import {
 } from "./constants";
 import { Input } from "./input";
 import { Sfx } from "./audio";
-import { DEFENSE_FORMATIONS, OFFENSE_FORMATIONS } from "./plays";
+import {
+  DEFENSE_BASE,
+  DEFENSE_FORMATIONS,
+  OFFENSE_BASE,
+  OFFENSE_FORMATIONS,
+} from "./plays";
 import type {
   BallState,
   DefenseFormation,
@@ -45,42 +50,38 @@ import { clamp, dist, lerp, rng, steer } from "./utils";
 interface FormSpot {
   slot: string;
   role: Role;
-  fwd: number;
-  lat: number;
   num: number;
   target?: string; // throw key shown above receiver
   assign?: string; // slot id a DB covers
 }
 
-// 11-man offense: 5 OL + FB block, QB, RB, 2 WR, TE. Route keys A/B/C/R map
-// the four eligible receivers to throw buttons 1-4.
+// Roster (positions come from OFFENSE_BASE / DEFENSE_BASE — single source).
 const OFF_FORM: FormSpot[] = [
-  { slot: "QB", role: "QB", fwd: -3, lat: 0, num: 7 },
-  { slot: "R", role: "RB", fwd: -3, lat: 3, num: 28, target: "4" },
-  { slot: "LT", role: "OL", fwd: -0.5, lat: -3, num: 73 },
-  { slot: "LG", role: "OL", fwd: -0.5, lat: -1.5, num: 66 },
-  { slot: "CEN", role: "OL", fwd: -0.5, lat: 0, num: 55 },
-  { slot: "RG", role: "OL", fwd: -0.5, lat: 1.5, num: 67 },
-  { slot: "RT", role: "OL", fwd: -0.5, lat: 3, num: 76 },
-  { slot: "F", role: "OL", fwd: -1.8, lat: -2, num: 44 }, // fullback / lead blocker
-  { slot: "A", role: "WR", fwd: -0.5, lat: -10, num: 80, target: "1" },
-  { slot: "B", role: "WR", fwd: -0.5, lat: 10, num: 88, target: "2" },
-  { slot: "C", role: "TE", fwd: -0.5, lat: 5, num: 84, target: "3" },
+  { slot: "QB", role: "QB", num: 7 },
+  { slot: "R", role: "RB", num: 28, target: "4" },
+  { slot: "LT", role: "OL", num: 73 },
+  { slot: "LG", role: "OL", num: 66 },
+  { slot: "CEN", role: "OL", num: 55 },
+  { slot: "RG", role: "OL", num: 67 },
+  { slot: "RT", role: "OL", num: 76 },
+  { slot: "F", role: "OL", num: 44 }, // fullback / lead blocker
+  { slot: "A", role: "WR", num: 80, target: "1" },
+  { slot: "B", role: "WR", num: 88, target: "2" },
+  { slot: "C", role: "TE", num: 84, target: "3" },
 ];
 
-// 11-man defense: 4-3 with 4 DBs. CBs/SS/FS take the eligible receivers in man.
 const DEF_FORM: FormSpot[] = [
-  { slot: "LE", role: "DL", fwd: 1, lat: -3.5, num: 91 },
-  { slot: "DT", role: "DL", fwd: 1, lat: -1.2, num: 94 },
-  { slot: "NT", role: "DL", fwd: 1, lat: 1.2, num: 98 },
-  { slot: "RE", role: "DL", fwd: 1, lat: 3.5, num: 56 },
-  { slot: "WLB", role: "LB", fwd: 4, lat: -6, num: 54 },
-  { slot: "MLB", role: "LB", fwd: 4.5, lat: 0, num: 52 },
-  { slot: "SLB", role: "LB", fwd: 4, lat: 6, num: 58 },
-  { slot: "CB1", role: "DB", fwd: 6, lat: -10, num: 24, assign: "A" },
-  { slot: "CB2", role: "DB", fwd: 6, lat: 10, num: 21, assign: "B" },
-  { slot: "SS", role: "DB", fwd: 9, lat: 6, num: 33, assign: "C" },
-  { slot: "FS", role: "DB", fwd: 12, lat: -3, num: 31, assign: "R" },
+  { slot: "LE", role: "DL", num: 91 },
+  { slot: "DT", role: "DL", num: 94 },
+  { slot: "NT", role: "DL", num: 98 },
+  { slot: "RE", role: "DL", num: 56 },
+  { slot: "WLB", role: "LB", num: 54 },
+  { slot: "MLB", role: "LB", num: 52 },
+  { slot: "SLB", role: "LB", num: 58 },
+  { slot: "CB1", role: "DB", num: 24, assign: "A" },
+  { slot: "CB2", role: "DB", num: 21, assign: "B" },
+  { slot: "SS", role: "DB", num: 33, assign: "C" },
+  { slot: "FS", role: "DB", num: 31, assign: "R" },
 ];
 
 // zone landmarks per defensive slot (yards downfield from LOS, lateral from mid)
@@ -351,9 +352,10 @@ export class Game {
 
     for (const f of OFF_FORM) {
       const p: Player = basePlayer(idOf(offTeam, f.slot), offTeam, f);
+      const base = OFFENSE_BASE[f.slot];
       const ov = offAlign[f.slot];
-      const fwd = ov?.fwd ?? f.fwd;
-      const lat = ov?.lat ?? f.lat;
+      const fwd = ov?.fwd ?? base.fwd;
+      const lat = ov?.lat ?? base.lat;
       p.ox = clamp(this.los + dir * fwd * YARD, LEFT_GOAL - 40, RIGHT_GOAL + 40);
       p.oy = clamp(midY + lat * YARD, SIDELINE, WORLD_H - SIDELINE);
       p.x = p.ox;
@@ -363,9 +365,10 @@ export class Game {
     }
     for (const f of DEF_FORM) {
       const p: Player = basePlayer(idOf(defTeam, f.slot), defTeam, f);
+      const base = DEFENSE_BASE[f.slot];
       const ov = defAlign[f.slot];
-      const fwd = ov?.fwd ?? f.fwd;
-      const lat = ov?.lat ?? f.lat;
+      const fwd = ov?.fwd ?? base.fwd;
+      const lat = ov?.lat ?? base.lat;
       p.ox = clamp(this.los + dir * fwd * YARD, LEFT_GOAL - 40, RIGHT_GOAL + 40);
       p.oy = clamp(midY + lat * YARD, SIDELINE, WORLD_H - SIDELINE);
       p.x = p.ox;
