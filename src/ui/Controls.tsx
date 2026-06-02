@@ -7,22 +7,10 @@ export function Controls({
   hud: HudState;
   touch?: boolean;
 }) {
-  if (hud.phase === "menu" || hud.phase === "gameover") {
-    return <div className="controls" />;
-  }
+  // on touch the on-screen buttons replace the keyboard hint bar
+  if (touch) return null;
+  if (hud.phase === "menu" || hud.phase === "gameover") return null;
   const off = hud.userOnOffense;
-  if (touch) {
-    return (
-      <div className="controls">
-        <span className="role-tag">{off ? "OFFENSE" : "DEFENSE"}</span>
-        <span className="hint">
-          {off
-            ? "Joystick to move · TURBO to sprint · tap a receiver to throw"
-            : "Joystick to move · SWITCH defenders · run into the carrier to tackle"}
-        </span>
-      </div>
-    );
-  }
   return (
     <div className="controls">
       <span className="role-tag">{off ? "OFFENSE" : "DEFENSE"}</span>

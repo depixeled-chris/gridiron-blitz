@@ -35,10 +35,13 @@ npm run preview  # serve the production build
 3. **Run the play** — scramble, find the open man, or hand it to the back. On defense, chase down the carrier and stack tackles.
 
 ### Mobile / touch
-On touch devices the game shows on-screen controls: a **left joystick** to move,
-a **TURBO** pad, and context buttons (**HIKE**, numbered **receiver** buttons +
-**OPEN**, or **SWITCH** on defense). The fixed 16:9 stage auto-scales to fit any
-screen, and a "rotate to landscape" prompt appears in portrait.
+The canvas renders **full-screen** — the field fills the whole viewport and the
+scoreboard, controls, and menus float as overlays on top. On touch devices the
+game shows on-screen controls: a **left joystick** to move, a **TURBO** pad, and
+context buttons (**HIKE**, numbered **receiver** buttons + **OPEN**, or **SWITCH**
+on defense). A "rotate to landscape" prompt appears in portrait, and an
+**install-to-home-screen** banner appears on open for the best full-screen
+experience.
 
 ### Install as an app (PWA)
 It's a Progressive Web App — installable and offline-capable:

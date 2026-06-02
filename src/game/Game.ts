@@ -5,7 +5,6 @@ import {
   COLORS,
   ENDZONE,
   FIELD_YARDS,
-  FIELD_Y,
   LEFT_GOAL,
   PASS_SPEED,
   PLAY_CLOCK,
@@ -132,6 +131,10 @@ export class Game {
   private offPlay: OffensePlay = OFFENSE_PLAYS[0];
   private defPlay: DefensePlay = DEFENSE_PLAYS[0];
   private camX = 0;
+  private host: HTMLElement | null = null;
+  private viewW = VIEW_W;
+  private viewH = VIEW_H;
+  private worldScale = 1;
   private deadTimer = 0;
   private snapTimer = 0;
   private throwTimer = 0; // AI QB drop timer
@@ -145,27 +148,53 @@ export class Game {
 
   // ---- lifecycle ---------------------------------------------------------
   async mount(el: HTMLElement) {
+    this.host = el;
     this.app = new Application();
     await this.app.init({
-      width: VIEW_W,
-      height: VIEW_H,
+      width: el.clientWidth || VIEW_W,
+      height: el.clientHeight || VIEW_H,
       background: 0x0a0a0a,
       antialias: true,
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
+      autoDensity: true,
     });
     el.appendChild(this.app.canvas);
 
     this.world.addChild(this.fieldGfx, this.overlay);
     this.app.stage.addChild(this.world);
     this.world.addChild(this.ballGfx);
-    this.world.y = FIELD_Y;
     this.drawField();
+    this.layout();
     this.input.attach();
 
+    window.addEventListener("resize", this.onResize);
+    window.addEventListener("orientationchange", this.onResize);
     this.app.ticker.add((t) => this.update(t.deltaMS / 1000));
+  }
+
+  /** size the renderer to the host element and scale the field to fill it */
+  private onResize = () => {
+    if (!this.app || !this.host) return;
+    const w = this.host.clientWidth || VIEW_W;
+    const h = this.host.clientHeight || VIEW_H;
+    this.app.renderer.resize(w, h);
+    this.layout();
+  };
+
+  private layout() {
+    this.viewW = this.app.screen.width;
+    this.viewH = this.app.screen.height;
+    // fit the full field height to the screen, then scroll horizontally
+    this.worldScale = clamp(this.viewH / WORLD_H, 0.5, 1.6);
+    this.world.scale.set(this.worldScale);
+    const span = WORLD_H * this.worldScale;
+    this.world.y = Math.max(0, (this.viewH - span) / 2);
   }
 
   destroy() {
     this.input.detach();
+    window.removeEventListener("resize", this.onResize);
+    window.removeEventListener("orientationchange", this.onResize);
     this.app?.destroy(true, { children: true });
     this.sprites.clear();
   }
@@ -1083,12 +1112,18 @@ export class Game {
 
   // ---- camera & render ---------------------------------------------------
   private updateCamera(dt: number) {
-    const focus =
-      this.carrier()?.x ??
-      (this.ball.inAir ? this.ball.x : this.los);
-    const tgt = clamp(focus - VIEW_W / 2, 0, WORLD_W - VIEW_W);
+    const focus = this.carrier()?.x ?? (this.ball.inAir ? this.ball.x : this.los);
+    const s = this.worldScale;
+    const span = WORLD_W * s;
+    // world.x is the screen-space offset of the (scaled) world container
+    let tgt: number;
+    if (span <= this.viewW) {
+      tgt = (this.viewW - span) / 2; // whole field fits: center it
+    } else {
+      tgt = clamp(this.viewW / 2 - focus * s, this.viewW - span, 0);
+    }
     this.camX = lerp(this.camX, tgt, Math.min(1, dt * 6));
-    this.world.x = -this.camX;
+    this.world.x = this.camX;
   }
 
   private render() {
