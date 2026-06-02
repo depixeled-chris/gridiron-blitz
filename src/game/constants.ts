@@ -34,7 +34,14 @@ export const SPEED: Record<string, number> = {
   DB: 9.6,
 };
 
-export const PASS_SPEED = 34 * YARD; // px/sec
+export const PASS_SPEED = 34 * YARD; // px/sec ground speed of a thrown ball
+
+// passing arc / height model (z axis, in px)
+export const Z_RELEASE = 1.5 * YARD; // QB release height
+export const Z_CATCH = 1.0 * YARD; // ball height at the catch point
+export const REACH = 2.4 * YARD; // how high a player can reach/jump for the ball
+export const BLOCKED_REACH = 1.2 * YARD; // an engaged blocker can't go up for it
+export const INT_CHANCE = 0.3; // defender in reach picks it instead of swatting
 export const QUARTER_SECONDS = 120; // arcade-short quarters
 export const PLAY_CLOCK = 25;
 

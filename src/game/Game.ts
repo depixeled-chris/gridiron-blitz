@@ -1,14 +1,17 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import {
   BLOCK_R,
+  BLOCKED_REACH,
   CATCH_R,
   COLORS,
   ENDZONE,
   FIELD_YARDS,
+  INT_CHANCE,
   LEFT_GOAL,
   PASS_SPEED,
   PLAY_CLOCK,
   QUARTER_SECONDS,
+  REACH,
   RIGHT_GOAL,
   SIDELINE,
   SPEED,
@@ -19,6 +22,8 @@ import {
   WORLD_H,
   WORLD_W,
   YARD,
+  Z_CATCH,
+  Z_RELEASE,
 } from "./constants";
 import { Input } from "./input";
 import { Sfx } from "./audio";
@@ -252,6 +257,18 @@ export class Game {
   debugPhase() {
     return this.phase;
   }
+  debugBall() {
+    const b = this.ball;
+    return {
+      x: b.x,
+      y: b.y,
+      z: b.z,
+      inAir: b.inAir,
+      carrier: b.carrier,
+      t: b.t,
+      peak: b.peak,
+    };
+  }
 
   // ---- touch input bridge (called from React on-screen controls) --------
   stick(x: number, y: number) {
@@ -445,36 +462,90 @@ export class Game {
   private updateOffense(dt: number) {
     const offTeam = this.possession;
     const carrier = this.carrier();
+    const ballLoose = this.ball.inAir;
     for (const p of this.players) {
       if (p.team !== offTeam) continue;
       if (p.role === "OL") continue; // handled in blocking
 
       const isCarrier = carrier?.id === p.id;
-      if (p.id === this.controlledId && this.userOnOffense()) {
+      const isUser = p.id === this.controlledId && this.userOnOffense();
+
+      if (isUser) {
         this.applyUserMove(p, dt);
         continue;
       }
 
-      if (isCarrier) {
-        // AI ball carrier runs to the goal, dodging defenders
-        this.runToGoal(p, dt);
+      // ball in the air: the target drives to the landing spot, others block
+      if (ballLoose) {
+        if (p.id === this.ball.targetId) {
+          this.moveToward(p, this.ball.tx, this.ball.ty, dt, 1);
+        } else if (p.route && p.routeIdx < p.route.length) {
+          this.followRoute(p, dt);
+        }
         continue;
       }
 
-      // QB AI on a pass play: drop back, then throw
-      if (p.role === "QB" && this.ball.carrier === p.id && !this.userOnOffense()) {
+      // AI QB on a pass play: drop back, then throw (checked before isCarrier
+      // so the QB passes instead of just scrambling for the goal)
+      if (
+        p.role === "QB" &&
+        this.ball.carrier === p.id &&
+        this.offPlay.kind === "pass" &&
+        !this.userOnOffense()
+      ) {
         this.aiQuarterback(p, dt);
         continue;
       }
 
-      // receivers run their routes
+      if (isCarrier) {
+        this.runToGoal(p, dt);
+        continue;
+      }
+
+      // once a teammate is carrying the ball, become a downfield blocker
+      if (carrier && !isCarrier) {
+        this.downfieldBlock(p, carrier, dt);
+        continue;
+      }
+
+      // otherwise run the route
       if (p.route && p.routeIdx < p.route.length) {
         this.followRoute(p, dt);
       } else if (p.route) {
-        // route finished — drift downfield slowly to stay alive
         const dir = this.offDir();
         this.moveToward(p, p.x + dir * YARD, p.y, dt, 0.55);
       }
+    }
+  }
+
+  /** an offensive player (not the carrier) walls off the nearest threat */
+  private downfieldBlock(p: Player, carrier: Player, dt: number) {
+    const dir = this.offDir();
+    // find the nearest defender that's a threat to the carrier
+    let tgt: Player | null = null;
+    let best = Infinity;
+    for (const d of this.players) {
+      if (d.team === p.team) continue;
+      // only block defenders that are near the carrier or near me
+      const dc = dist(d.x, d.y, carrier.x, carrier.y);
+      const dm = dist(d.x, d.y, p.x, p.y);
+      const score = dm + dc * 0.6;
+      if (dc < 14 * YARD && score < best) {
+        best = score;
+        tgt = d;
+      }
+    }
+    if (!tgt) {
+      // no one to block — lead the carrier upfield
+      this.moveToward(p, carrier.x + dir * 3 * YARD, carrier.y, dt, 0.85);
+      return;
+    }
+    // get onto the goal side of the defender (between them and the end zone)
+    const aimX = tgt.x + dir * 0.8 * YARD;
+    this.moveToward(p, aimX, tgt.y, dt, 1);
+    if (dist(p.x, p.y, tgt.x, tgt.y) < BLOCK_R) {
+      tgt.blocked = true;
+      tgt.x -= dir * 0.35; // shove back toward their own side
     }
   }
 
@@ -701,9 +772,26 @@ export class Game {
   // ---- blocking ----------------------------------------------------------
   private updateBlocking() {
     const offTeam = this.possession;
+    const carrier = this.carrier();
+    const dir = this.offDir();
+    // pocket pass-protect only while the QB still has it behind the LOS
+    const pocket =
+      this.ball.inAir ||
+      (carrier !== null &&
+        carrier.role === "QB" &&
+        this.offPlay.kind === "pass" &&
+        dir * (carrier.x - this.los) < 1 * YARD);
+
     const blockers = this.players.filter(
       (p) => p.team === offTeam && p.role === "OL"
     );
+
+    if (!pocket && carrier) {
+      // ball is being carried downfield — linemen become lead blockers too
+      for (const ol of blockers) this.downfieldBlock(ol, carrier, 0);
+      return;
+    }
+
     const rushers = this.players.filter(
       (p) => p.team !== offTeam && (p.role === "DL" || p.role === "LB")
     );
@@ -722,9 +810,7 @@ export class Game {
         this.moveTowardRaw(ol, tgt.x, tgt.y, 1);
         if (bd < BLOCK_R) {
           tgt.blocked = true;
-          // shove the defender back a touch
-          const dir = this.offDir();
-          tgt.x += dir * 0.4;
+          tgt.x += dir * 0.4; // shove the defender back a touch
         }
       } else {
         ol.vx = 0;
@@ -764,18 +850,40 @@ export class Game {
     const r = this.byId(receiverId);
     if (!r) return;
     const b = this.ball;
+
+    // lead the receiver: predict where they'll be when the ball arrives
+    let landX = r.x;
+    let landY = r.y;
+    for (let i = 0; i < 3; i++) {
+      const ft = dist(qb.x, qb.y, landX, landY) / PASS_SPEED;
+      landX = r.x + r.vx * ft;
+      landY = r.y + r.vy * ft;
+    }
+    landX = clamp(landX, LEFT_GOAL - 40, RIGHT_GOAL + 40);
+    landY = clamp(landY, SIDELINE, WORLD_H - SIDELINE);
+
     qb.hasBall = false;
     b.carrier = null;
     b.inAir = true;
     b.targetId = receiverId;
     b.sx = qb.x;
-    b.sy = qb.y - 14;
-    b.x = b.sx;
-    b.y = b.sy;
-    b.tx = r.x;
-    b.ty = r.y;
-    b.arc = clamp(dist(qb.x, qb.y, r.x, r.y) * 0.12, 16, 60);
+    b.sy = qb.y;
+    b.x = qb.x;
+    b.y = qb.y;
+    b.z = Z_RELEASE;
+    b.tx = landX;
+    b.ty = landY;
     b.t = 0;
+    b.elapsed = 0;
+    const throwDist = dist(qb.x, qb.y, landX, landY);
+    b.ftime = Math.max(0.28, throwDist / PASS_SPEED);
+    // longer throws arc higher; this is what lets the ball clear the rush
+    b.peak = clamp(throwDist * 0.16, 1.0 * YARD, 3.2 * YARD);
+    // hand control of the target to the user so they can adjust to the ball
+    if (this.userOnOffense()) {
+      this.controlledId = receiverId;
+      this.setControlFlags();
+    }
     this.message = "";
     this.audio.throw();
   }
@@ -788,69 +896,49 @@ export class Game {
       if (c) {
         b.x = c.x;
         b.y = c.y - 10;
+        b.z = 0;
       }
       return;
     }
-    // homing flight toward the receiver's live position
-    const r = b.targetId ? this.byId(b.targetId) : null;
-    if (r) {
-      b.tx = r.x;
-      b.ty = r.y;
-    }
-    const total = Math.max(1, dist(b.sx, b.sy, b.tx, b.ty));
-    const step = PASS_SPEED * dt;
-    const d = dist(b.x, b.y, b.tx, b.ty);
-    b.t = clamp(1 - d / total, 0, 1);
-    if (d <= step) {
-      b.x = b.tx;
-      b.y = b.ty;
-      this.resolvePass();
-      return;
-    }
-    const s = steer(b.x, b.y, b.tx, b.ty, step);
-    b.x += s.vx;
-    b.y += s.vy;
 
-    // defender deflection / interception in flight
+    b.elapsed += dt;
+    b.t = clamp(b.elapsed / b.ftime, 0, 1);
+    // ground position travels in a straight line start -> landing spot
+    b.x = lerp(b.sx, b.tx, b.t);
+    b.y = lerp(b.sy, b.ty, b.t);
+    // height follows a parabolic arc: rises off the QB's hand, drops to the catch
+    b.z = lerp(Z_RELEASE, Z_CATCH, b.t) + b.peak * Math.sin(Math.PI * b.t);
+
+    // anyone whose ground position is under the ball AND who can reach its
+    // current height may play it. Near the QB the ball is low (rusher can swat);
+    // over the middle it's high (clears engaged/short defenders); descending into
+    // the receiver it's catchable again.
     const offTeam = this.possession;
+    // defenders first — a defender in reach swats or picks it
     for (const p of this.players) {
       if (p.team === offTeam) continue;
-      if (dist(p.x, p.y, b.x, b.y) < CATCH_R * 0.8) {
-        if (rng() < 0.4) {
-          this.interception(p);
-        } else {
-          this.incomplete();
-        }
-        return;
-      }
+      if (dist(p.x, p.y, b.x, b.y) > CATCH_R) continue;
+      const reach = p.blocked ? BLOCKED_REACH : REACH;
+      if (b.z > reach) continue;
+      if (rng() < INT_CHANCE) return this.interception(p);
+      return this.batDown(p);
     }
+    // then eligible receivers — a receiver in reach catches it
+    for (const p of this.players) {
+      if (p.team !== offTeam || !p.target) continue;
+      if (dist(p.x, p.y, b.x, b.y) > CATCH_R) continue;
+      if (b.z > REACH) continue;
+      return this.completePass(p);
+    }
+
+    if (b.t >= 1) this.incomplete(); // hit the turf, nobody there
   }
 
-  private resolvePass() {
+  private completePass(r: Player) {
     const b = this.ball;
-    const r = b.targetId ? this.byId(b.targetId) : null;
-    if (!r) return this.incomplete();
-    // contested by a defender within catch radius?
-    const offTeam = this.possession;
-    let closestDef: Player | null = null;
-    let cd = Infinity;
-    for (const p of this.players) {
-      if (p.team === offTeam) continue;
-      const d = dist(p.x, p.y, b.x, b.y);
-      if (d < cd) {
-        cd = d;
-        closestDef = p;
-      }
-    }
-    const recDist = dist(r.x, r.y, b.x, b.y);
-    if (recDist > CATCH_R * 1.4) return this.incomplete();
-    if (closestDef && cd < recDist && cd < CATCH_R) {
-      if (rng() < 0.45) return this.interception(closestDef);
-      return this.incomplete();
-    }
-    // completion!
     b.inAir = false;
     b.targetId = null;
+    b.z = 0;
     r.hasBall = true;
     b.carrier = r.id;
     if (this.userOnOffense()) {
@@ -859,6 +947,13 @@ export class Game {
     }
     this.message = "CAUGHT!";
     this.audio.catchBall();
+  }
+
+  /** ball batted down at the line / in coverage — incomplete at that spot */
+  private batDown(by: Player) {
+    void by;
+    this.ball.z = 0;
+    this.incomplete();
   }
 
   private incomplete() {
@@ -870,6 +965,7 @@ export class Game {
   private interception(by: Player) {
     this.ball.inAir = false;
     this.ball.targetId = null;
+    this.ball.z = 0;
     this.message = "INTERCEPTED!";
     this.audio.turnover();
     this.endPlay({ type: "turnover", spotX: by.x, by });
@@ -1148,13 +1244,17 @@ export class Game {
     const g = this.ballGfx;
     g.clear();
     const b = this.ball;
-    let y = b.y;
     if (b.inAir) {
-      const lift = Math.sin(b.t * Math.PI) * b.arc;
-      y = b.y - lift;
+      // ground shadow tracks the true landing path; shrinks/fades as it rises
+      const f = clamp(1 - b.z / (7 * YARD), 0.35, 1);
+      g.ellipse(b.x, b.y, 7 * f, 3.5 * f).fill({ color: 0x000000, alpha: 0.3 * f });
+      const sy = b.y - b.z; // lift the ball up by its height
+      g.ellipse(b.x, sy, 6, 4).fill(COLORS.ball);
+      g.ellipse(b.x, sy, 6, 4).stroke({ width: 1, color: 0xffffff, alpha: 0.6 });
+    } else {
+      g.ellipse(b.x, b.y, 6, 4).fill(COLORS.ball);
+      g.ellipse(b.x, b.y, 6, 4).stroke({ width: 1, color: 0xffffff, alpha: 0.5 });
     }
-    g.ellipse(b.x, y, 6, 4).fill(COLORS.ball);
-    g.ellipse(b.x, y, 6, 4).stroke({ width: 1, color: 0xffffff, alpha: 0.5 });
   }
 
   // ---- HUD bridge --------------------------------------------------------
@@ -1364,15 +1464,18 @@ function freshBall(): BallState {
   return {
     x: 0,
     y: 0,
+    z: 0,
     carrier: null,
     inAir: false,
     t: 0,
+    elapsed: 0,
+    ftime: 1,
     sx: 0,
     sy: 0,
     tx: 0,
     ty: 0,
     targetId: null,
-    arc: 0,
+    peak: 0,
   };
 }
 

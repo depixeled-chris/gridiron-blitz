@@ -77,21 +77,27 @@ export interface Player {
 }
 
 export interface BallState {
+  /** ground position (px) */
   x: number;
   y: number;
+  /** height above the ground (px); 0 when carried/grounded */
+  z: number;
   /** id of carrier, or null while in flight / loose */
   carrier: string | null;
   inAir: boolean;
   /** flight progress 0..1 */
   t: number;
+  elapsed: number;
+  ftime: number;
+  /** launch + landing ground points */
   sx: number;
   sy: number;
   tx: number;
   ty: number;
   /** intended receiver id for an in-air pass */
   targetId: string | null;
-  /** arc height in px */
-  arc: number;
+  /** apex height added by the arc (px) */
+  peak: number;
 }
 
 export interface HudState {
