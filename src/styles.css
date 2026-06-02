@@ -16,22 +16,64 @@ body,
 #root {
   margin: 0;
   height: 100%;
+  overflow: hidden;
   background: radial-gradient(circle at 50% 0%, #16213c 0%, #0a0e1a 70%);
   color: #eef2fb;
   font-family: "Segoe UI", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .app {
-  min-height: 100%;
+  height: 100vh;
+  height: 100dvh;
   display: grid;
   place-items: center;
-  padding: 18px;
+  overflow: hidden;
 }
 
 .stage {
   width: 960px;
-  max-width: 100%;
+  flex: none;
+  transform-origin: center center;
+}
+
+/* prompt to rotate when a touch device is held in portrait */
+.rotate-hint {
+  display: none;
+}
+@media (orientation: portrait) and (pointer: coarse) {
+  .stage {
+    display: none;
+  }
+  .rotate-hint {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: #cdd9f0;
+    text-align: center;
+    padding: 24px;
+  }
+  .rotate-icon {
+    font-size: 64px;
+    animation: rock 1.4s ease-in-out infinite;
+  }
+}
+@keyframes rock {
+  0%,
+  100% {
+    transform: rotate(-18deg);
+  }
+  50% {
+    transform: rotate(18deg);
+  }
 }
 
 /* ---- scoreboard ---- */
@@ -106,13 +148,16 @@ body,
   position: relative;
   width: 960px;
   height: 540px;
-  max-width: 100%;
   border: 1px solid var(--line);
   background: #0a0a0a;
   overflow: hidden;
+  touch-action: none;
 }
+.canvas-host,
 .canvas-host canvas {
   display: block;
+  width: 960px;
+  height: 540px;
 }
 
 /* ---- overlays ---- */
@@ -308,5 +353,99 @@ body,
   color: var(--gold);
 }
 .controls .hint b {
+  color: #fff;
+}
+
+/* ---- touch controls ---- */
+.touch-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+.touch-layer > * {
+  pointer-events: auto;
+}
+
+.joystick {
+  position: absolute;
+  left: 22px;
+  bottom: 22px;
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.12),
+    rgba(255, 255, 255, 0.05)
+  );
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  touch-action: none;
+  display: grid;
+  place-items: center;
+}
+.joystick .knob {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff, #b9c6e6);
+  border: 2px solid rgba(0, 0, 0, 0.35);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.touch-actions {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+.throw-cluster {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 8px;
+}
+.tbtn {
+  border: none;
+  border-radius: 50%;
+  color: #0a0e1a;
+  font-weight: 900;
+  font-family: "Consolas", monospace;
+  letter-spacing: 1px;
+  touch-action: none;
+  cursor: pointer;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.4);
+  transition: transform 0.05s, box-shadow 0.05s;
+}
+.tbtn:active {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+}
+.tbtn.rcv {
+  width: 56px;
+  height: 56px;
+  font-size: 22px;
+  background: linear-gradient(180deg, #8fb8ff, #4f7ddb);
+}
+.tbtn.open {
+  width: 56px;
+  height: 56px;
+  font-size: 13px;
+  background: linear-gradient(180deg, #ffe27a, var(--gold));
+  align-self: center;
+}
+.tbtn.big {
+  width: 88px;
+  height: 88px;
+  font-size: 17px;
+  background: linear-gradient(180deg, #ffe27a, var(--gold));
+}
+.tbtn.turbo {
+  width: 96px;
+  height: 96px;
+  font-size: 17px;
+  background: linear-gradient(180deg, #ff8a5c, #e2562f);
   color: #fff;
 }

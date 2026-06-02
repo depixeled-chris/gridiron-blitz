@@ -183,6 +183,17 @@ export class Game {
     return this.possession === this.userTeam;
   }
 
+  // ---- touch input bridge (called from React on-screen controls) --------
+  stick(x: number, y: number) {
+    this.input.setStick(x, y);
+  }
+  setTurbo(on: boolean) {
+    this.input.setTurbo(on);
+  }
+  tap(code: string) {
+    this.input.virtualPress(code);
+  }
+
   availablePlays() {
     return this.userOnOffense() ? OFFENSE_PLAYS : DEFENSE_PLAYS;
   }
@@ -976,6 +987,13 @@ export class Game {
       message: this.message,
       playClock: Math.ceil(this.playClock),
       userOnOffense: this.userOnOffense(),
+      canHike: this.phase === "presnap" && this.userOnOffense(),
+      canThrow:
+        this.phase === "live" &&
+        this.userOnOffense() &&
+        this.offPlay.kind === "pass" &&
+        this.ball.carrier?.endsWith("_QB") === true,
+      canSwitch: this.phase === "live" && !this.userOnOffense(),
     };
   }
 

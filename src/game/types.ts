@@ -104,4 +104,8 @@ export interface HudState {
   message: string;
   playClock: number;
   userOnOffense: boolean;
+  /** touch-UI context flags */
+  canHike: boolean;
+  canThrow: boolean;
+  canSwitch: boolean;
 }

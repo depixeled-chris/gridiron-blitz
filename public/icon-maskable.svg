@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="turf" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#23a046" />
+      <stop offset="1" stop-color="#178038" />
+    </linearGradient>
+    <linearGradient id="ball" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8a4d18" />
+      <stop offset="1" stop-color="#6a360e" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#turf)" />
+  <g stroke="#ffffff" stroke-linecap="round" opacity="0.5">
+    <line x1="150" y1="150" x2="150" y2="362" stroke-width="7" />
+    <line x1="256" y1="140" x2="256" y2="372" stroke-width="10" />
+    <line x1="362" y1="150" x2="362" y2="362" stroke-width="7" />
+  </g>
+  <g transform="translate(256 256) rotate(-24) scale(0.74)">
+    <ellipse rx="132" ry="84" fill="url(#ball)" stroke="#3a1d06" stroke-width="10" />
+    <line x1="-74" y1="0" x2="74" y2="0" stroke="#ffffff" stroke-width="12" stroke-linecap="round" />
+    <g stroke="#ffffff" stroke-width="9" stroke-linecap="round">
+      <line x1="-44" y1="-15" x2="-44" y2="15" />
+      <line x1="-15" y1="-18" x2="-15" y2="18" />
+      <line x1="15" y1="-18" x2="15" y2="18" />
+      <line x1="44" y1="-15" x2="44" y2="15" />
+    </g>
+  </g>
+</svg>

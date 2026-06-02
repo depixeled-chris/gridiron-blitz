@@ -1,10 +1,28 @@
 import type { HudState } from "../game/types";
 
-export function Controls({ hud }: { hud: HudState }) {
+export function Controls({
+  hud,
+  touch = false,
+}: {
+  hud: HudState;
+  touch?: boolean;
+}) {
   if (hud.phase === "menu" || hud.phase === "gameover") {
     return <div className="controls" />;
   }
   const off = hud.userOnOffense;
+  if (touch) {
+    return (
+      <div className="controls">
+        <span className="role-tag">{off ? "OFFENSE" : "DEFENSE"}</span>
+        <span className="hint">
+          {off
+            ? "Joystick to move · TURBO to sprint · tap a receiver to throw"
+            : "Joystick to move · SWITCH defenders · run into the carrier to tackle"}
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="controls">
       <span className="role-tag">{off ? "OFFENSE" : "DEFENSE"}</span>
