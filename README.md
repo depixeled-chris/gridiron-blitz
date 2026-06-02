@@ -36,6 +36,20 @@ npm run preview  # serve the production build
 
 Four quarters, short arcade clock. Touchdowns are 7, safeties are 2. Get a first down (yellow line) or you'll turn it over on downs.
 
+## Deploy to GitHub Pages
+
+A workflow at `.github/workflows/deploy.yml` builds and publishes to Pages on every
+push to `main`. One-time setup:
+
+1. Create a GitHub repo and push this project to `main`.
+2. In the repo: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+3. Push (or run the workflow manually from the **Actions** tab). The site goes live at
+   `https://<user>.github.io/<repo>/`.
+
+`actions/configure-pages` auto-detects the project path and passes it to the build via
+`VITE_BASE`, so asset URLs resolve correctly under the `/<repo>/` sub-path — no manual
+config per repo name.
+
 ## Architecture
 
 ```
