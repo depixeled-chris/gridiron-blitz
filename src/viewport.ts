@@ -35,6 +35,18 @@ export function initViewport() {
   });
   // keep the page pinned so the bars don't toggle the layout under us
   window.addEventListener("scroll", () => window.scrollTo(0, 0), { passive: true });
+
+  // Bulletproof iOS scroll lock: cancel touch-scroll everywhere except inside
+  // scrollable menu overlays (which may need to scroll on short screens).
+  document.addEventListener(
+    "touchmove",
+    (e) => {
+      const t = e.target;
+      if (t instanceof Element && t.closest(".overlay")) return;
+      e.preventDefault();
+    },
+    { passive: false }
+  );
 }
 
 /** subscribe to viewport changes; returns an unsubscribe fn */
