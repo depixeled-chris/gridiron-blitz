@@ -29,12 +29,7 @@ import {
 } from "./constants";
 import { Input } from "./input";
 import { Sfx } from "./audio";
-import {
-  DEFENSE_BASE,
-  DEFENSE_FORMATIONS,
-  OFFENSE_BASE,
-  OFFENSE_FORMATIONS,
-} from "./plays";
+import { DEFENSE_FORMATIONS, OFFENSE_BASE, OFFENSE_FORMATIONS } from "./plays";
 import type {
   BallState,
   DefenseFormation,
@@ -71,31 +66,6 @@ const OFF_FORM: FormSpot[] = [
   { slot: "B", role: "WR", num: 88, target: "2" },
   { slot: "C", role: "TE", num: 84, target: "3" },
 ];
-
-const DEF_FORM: FormSpot[] = [
-  { slot: "LE", role: "DL", num: 91 },
-  { slot: "DT", role: "DL", num: 94 },
-  { slot: "NT", role: "DL", num: 98 },
-  { slot: "RE", role: "DL", num: 56 },
-  { slot: "WLB", role: "LB", num: 54 },
-  { slot: "MLB", role: "LB", num: 52 },
-  { slot: "SLB", role: "LB", num: 58 },
-  { slot: "CB1", role: "DB", num: 24, assign: "A" },
-  { slot: "CB2", role: "DB", num: 21, assign: "B" },
-  { slot: "SS", role: "DB", num: 33, assign: "C" },
-  { slot: "FS", role: "DB", num: 31, assign: "R" },
-];
-
-// zone landmarks per defensive slot (yards downfield from LOS, lateral from mid)
-const ZONE: Record<string, { fwd: number; lat: number }> = {
-  CB1: { fwd: 7, lat: -11 },
-  CB2: { fwd: 7, lat: 11 },
-  SS: { fwd: 13, lat: 7 },
-  FS: { fwd: 16, lat: -5 },
-  WLB: { fwd: 7, lat: -7 },
-  MLB: { fwd: 9, lat: 0 },
-  SLB: { fwd: 7, lat: 7 },
-};
 
 const TARGET_KEYS: Record<string, string> = {
   Digit1: "1",
@@ -280,6 +250,29 @@ export class Game {
   debugPhase() {
     return this.phase;
   }
+  debugDefense() {
+    const defTeam: Team = this.possession === "home" ? "away" : "home";
+    const dir = this.offDir();
+    return {
+      formation: this.defFormation.id,
+      play: this.defPlay.id,
+      coverage: this.defPlay.coverage,
+      blitzers: this.defPlay.blitzers,
+      los: this.los,
+      dir,
+      defenders: this.players
+        .filter((p) => p.team === defTeam)
+        .map((p) => ({
+          slot: p.id.split("_")[1],
+          job: p.job,
+          defRole: p.defRole,
+          x: Math.round(p.x),
+          y: Math.round(p.y),
+          // how far past the LOS toward the QB (positive = rushing into backfield)
+          pen: Math.round((dir * (this.los - p.x)) / YARD),
+        })),
+    };
+  }
   debugBall() {
     const b = this.ball;
     return {
@@ -350,7 +343,6 @@ export class Game {
     const idOf = (team: Team, slot: string) => `${team}_${slot}`;
 
     const offAlign = this.offFormation.align ?? {};
-    const defAlign = this.defFormation.align ?? {};
 
     for (const f of OFF_FORM) {
       const p: Player = basePlayer(idOf(offTeam, f.slot), offTeam, f);
@@ -365,18 +357,18 @@ export class Game {
       p.target = f.target;
       this.players.push(p);
     }
-    for (const f of DEF_FORM) {
-      const p: Player = basePlayer(idOf(defTeam, f.slot), defTeam, f);
-      const base = DEFENSE_BASE[f.slot];
-      const ov = defAlign[f.slot];
-      const fwd = ov?.fwd ?? base.fwd;
-      const lat = ov?.lat ?? base.lat;
-      p.ox = clamp(this.los + dir * fwd * YARD, LEFT_GOAL - 40, RIGHT_GOAL + 40);
-      p.oy = clamp(midY + lat * YARD, SIDELINE, WORLD_H - SIDELINE);
+    // defense: the selected front's personnel + alignment
+    for (const f of this.defFormation.front) {
+      const p: Player = basePlayer(idOf(defTeam, f.slot), defTeam, {
+        slot: f.slot,
+        role: f.role === "CB" || f.role === "S" ? "DB" : f.role,
+        num: f.num,
+      });
+      p.defRole = f.role;
+      p.ox = clamp(this.los + dir * f.fwd * YARD, LEFT_GOAL - 40, RIGHT_GOAL + 40);
+      p.oy = clamp(midY + f.lat * YARD, SIDELINE, WORLD_H - SIDELINE);
       p.x = p.ox;
       p.y = p.oy;
-      if (f.assign) p.assignId = idOf(offTeam, f.assign);
-      if (ZONE[f.slot]) p.zone = ZONE[f.slot];
       this.players.push(p);
     }
 
@@ -392,31 +384,139 @@ export class Game {
       p.routeIdx = 0;
     }
 
+    this.assignDefense(offTeam, defTeam, dir, midY);
+
     // build sprites
     for (const p of this.players) this.makeSprite(p);
     // keep the ball drawn on top of every player sprite
     this.world.addChild(this.ballGfx);
 
-    // initial control: user controls QB (or runner) on offense, a LB on defense
+    // initial control: user controls QB (or runner) on offense, the MIKE / a
+    // box defender on defense
     if (this.userOnOffense()) {
       this.controlledId = idOf(offTeam, "QB");
     } else {
-      this.controlledId = idOf(defTeam, "MLB");
+      this.controlledId = this.pickDefaultDefender(defTeam);
     }
     this.setControlFlags();
+  }
 
-    // decide the pass rush once per play (DL always rush; LBs per blitz rate)
+  /** assign each defender a job (rush / man / zone / spy), gap, and landmark */
+  private assignDefense(offTeam: Team, defTeam: Team, dir: number, midY: number) {
+    const defenders = this.players.filter((p) => p.team === defTeam);
+    const play = this.defPlay;
     this.rushers.clear();
-    for (const p of this.players) {
-      if (p.team !== defTeam) continue;
-      if (p.role === "DL") this.rushers.add(p.id);
-      else if (p.role === "LB" && rng() < this.defPlay.blitz) this.rushers.add(p.id);
+
+    // 1) the rush: every down lineman, plus `blitzers` linebackers/DBs nearest LOS
+    const dl = defenders.filter((d) => d.defRole === "DL");
+    for (const d of dl) {
+      d.job = "rush";
+      this.rushers.add(d.id);
     }
-    // all-out blitz: send a safety too
-    if (this.defPlay.blitz >= 1) {
-      const ss = this.byId(idOf(defTeam, "SS"));
-      if (ss) this.rushers.add(ss.id);
+    const blitzPool = defenders
+      .filter((d) => d.defRole === "LB")
+      .sort((a, b) => Math.abs(a.oy - midY) - Math.abs(b.oy - midY));
+    const allPool = blitzPool.concat(
+      defenders.filter((d) => d.defRole === "S").sort((a, b) => a.ox * dir - b.ox * dir)
+    );
+    for (let i = 0; i < play.blitzers && i < allPool.length; i++) {
+      allPool[i].job = "rush";
+      this.rushers.add(allPool[i].id);
     }
+
+    // run-fit gaps: every front-seven defender owns a lane across the front,
+    // so on a run they hold gap integrity instead of all crashing the back
+    const box = defenders
+      .filter((d) => d.defRole === "DL" || d.defRole === "LB")
+      .sort((a, b) => a.oy - b.oy);
+    box.forEach((d, i) => {
+      d.gap = (i - (box.length - 1) / 2) * 1.5; // yards from center
+    });
+
+    // 2) coverage defenders (everyone not rushing)
+    const cover = defenders.filter((d) => !this.rushers.has(d.id));
+    const receivers = this.players.filter((p) => p.team === offTeam && !!p.target);
+
+    if (play.coverage === "man") {
+      // CBs take the widest receivers; safeties/LBs take the rest inside-out
+      const recs = [...receivers].sort((a, b) => a.oy - b.oy);
+      const cbs = cover.filter((d) => d.defRole === "CB");
+      const rest = cover.filter((d) => d.defRole !== "CB");
+      const wides = recs.filter((r) => Math.abs(r.oy - midY) > 5 * YARD);
+      const inside = recs.filter((r) => Math.abs(r.oy - midY) <= 5 * YARD);
+      const assign = (defs: Player[], targs: Player[]) => {
+        for (const t of targs) {
+          let best: Player | null = null;
+          let bd = Infinity;
+          for (const d of defs) {
+            if (d.assignId) continue;
+            const dd = Math.abs(d.oy - t.oy);
+            if (dd < bd) {
+              bd = dd;
+              best = d;
+            }
+          }
+          if (best) {
+            best.assignId = t.id;
+            best.job = "man";
+          }
+        }
+      };
+      assign(cbs, wides);
+      assign([...rest, ...cbs], inside);
+      // leftover defenders spy / robber the middle
+      for (const d of cover) if (d.job !== "man") d.job = "spy";
+    } else {
+      // zone: deep shell + underneath, spread across the field width
+      const nDeep = play.coverage === "cover2" ? 2 : play.coverage === "cover3" ? 3 : 4;
+      // deepest coverage players take the deep zones
+      const byDepth = [...cover].sort((a, b) => (b.ox - a.ox) * dir);
+      const deep = byDepth.slice(0, Math.min(nDeep, byDepth.length));
+      const under = byDepth.slice(deep.length);
+      const deepFwd = play.coverage === "cover4" ? 14 : 16;
+      const spread = (defs: Player[], fwd: number, span: number) => {
+        const n = defs.length;
+        defs
+          .slice()
+          .sort((a, b) => a.oy - b.oy)
+          .forEach((d, i) => {
+            const frac = n === 1 ? 0.5 : i / (n - 1);
+            const lat = (frac - 0.5) * span; // yards across the field
+            d.job = "zone";
+            d.zone = {
+              x: clamp(this.los + dir * fwd * YARD, LEFT_GOAL, RIGHT_GOAL + 200),
+              y: clamp(midY + lat * YARD, SIDELINE, WORLD_H - SIDELINE),
+            };
+          });
+      };
+      spread(deep, deepFwd, 18); // deep zones use most of the width
+      spread(under, 6.5, 20); // underneath flats/hooks slightly wider
+    }
+
+    // CBs line up across from the receiver they're nearest to
+    for (const d of defenders) {
+      if (d.defRole !== "CB") continue;
+      let near: Player | null = null;
+      let bd = Infinity;
+      for (const r of receivers) {
+        const dd = Math.abs(r.oy - d.oy);
+        if (dd < bd) {
+          bd = dd;
+          near = r;
+        }
+      }
+      if (near && bd < 8 * YARD) {
+        d.oy = clamp(near.oy, SIDELINE, WORLD_H - SIDELINE);
+        d.y = d.oy;
+      }
+    }
+  }
+
+  private pickDefaultDefender(defTeam: Team) {
+    // prefer the middle linebacker, else any LB, else nearest defender to the ball
+    const defs = this.players.filter((p) => p.team === defTeam);
+    const mlb = defs.find((d) => d.id.endsWith("_MLB")) ?? defs.find((d) => d.defRole === "LB");
+    return (mlb ?? defs[0]).id;
   }
 
   private snap() {
@@ -717,9 +817,18 @@ export class Game {
   private runToGoal(p: Player, dt: number) {
     const dir = this.offDir();
     const goalX = dir > 0 ? RIGHT_GOAL + ENDZONE * YARD : LEFT_GOAL - ENDZONE * YARD;
-    let tx = goalX;
-    let ty = p.y;
-    // avoid nearest defenders
+    // on a designed run, aim through the hole until past the line, then turn upfield
+    const behindLine = dir * (p.x - this.los) < 1.5 * YARD;
+    if (this.offPlay.kind === "run" && behindLine) {
+      const holeY = clamp(
+        WORLD_H / 2 + (this.offPlay.hole ?? 0) * YARD,
+        SIDELINE,
+        WORLD_H - SIDELINE
+      );
+      this.moveToward(p, this.los + dir * 4 * YARD, holeY, dt, 1);
+      return;
+    }
+    // avoid nearest defenders, run for the end zone
     let ax = 0;
     let ay = 0;
     for (const d of this.players) {
@@ -731,8 +840,9 @@ export class Game {
         ay += ((p.y - d.y) / dd) * w;
       }
     }
-    ty = clamp(p.y + ay * 4 * YARD, SIDELINE, WORLD_H - SIDELINE);
-    tx = p.x + dir * 3 * YARD + ax * 1.2 * YARD;
+    const ty = clamp(p.y + ay * 4 * YARD, SIDELINE, WORLD_H - SIDELINE);
+    const tx = p.x + dir * 3 * YARD + ax * 1.2 * YARD;
+    void goalX;
     this.moveToward(p, tx, ty, dt, 1);
   }
 
@@ -740,22 +850,20 @@ export class Game {
   private updateDefense(dt: number) {
     const defTeam: Team = this.possession === "home" ? "away" : "home";
     const carrier = this.carrier();
-    const qbHasBall =
-      carrier && carrier.role === "QB" && this.offPlay.kind === "pass";
+    const dir = this.offDir();
+    // a run / scramble / catch-and-run is live once the ball is being carried
+    // by someone other than a QB still in the pocket on a pass play
+    const pocketPass =
+      carrier &&
+      carrier.role === "QB" &&
+      this.offPlay.kind === "pass" &&
+      dir * (carrier.x - this.los) < 1.5 * YARD;
+    const ballCarried = carrier && !this.ball.inAir && !pocketPass;
 
-    // user switches controlled defender
-    if (!this.userOnOffense()) {
-      if (this.input.pressed("Space") && this.switchCooldown <= 0) {
-        this.switchDefender();
-        this.switchCooldown = 0.25;
-      }
+    if (!this.userOnOffense() && this.input.pressed("Space") && this.switchCooldown <= 0) {
+      this.switchDefender();
+      this.switchCooldown = 0.25;
     }
-
-    const target = this.ball.inAir
-      ? { x: this.ball.tx, y: this.ball.ty }
-      : carrier
-        ? { x: carrier.x, y: carrier.y }
-        : { x: this.los, y: WORLD_H / 2 };
 
     for (const p of this.players) {
       if (p.team !== defTeam) continue;
@@ -764,28 +872,77 @@ export class Game {
         continue;
       }
 
-      const rushing = this.rushers.has(p.id);
-
-      if (qbHasBall && !this.ball.inAir) {
-        if (rushing) {
-          const to = this.intercept(p, carrier!);
-          this.moveToward(p, to.x, to.y, dt, p.blocked ? 0.45 : 1);
-        } else if (this.defPlay.coverage === "man") {
-          this.coverMan(p, dt);
+      if (this.ball.inAir) {
+        this.moveToward(p, this.ball.tx, this.ball.ty, dt, 1); // break on the ball
+        continue;
+      }
+      if (ballCarried) {
+        const past = dir * (carrier!.x - this.los) > 0.5 * YARD;
+        if (this.offPlay.kind === "run" && !past) {
+          this.runFit(p, carrier!, dt);
         } else {
-          this.coverZone(p, dt);
+          this.pursueCarrier(p, carrier!, dt);
         }
-      } else if (this.ball.inAir) {
-        // break on the ball
-        this.moveToward(p, this.ball.tx, this.ball.ty, dt, 1);
-      } else if (carrier) {
-        // ball is being carried (run, scramble, or after the catch): pursue
-        const to = this.intercept(p, carrier);
-        this.moveToward(p, to.x, to.y, dt, p.blocked ? 0.5 : 1);
-      } else {
-        this.moveToward(p, target.x, target.y, dt, 0.9);
+        continue;
+      }
+      // pass developing — everyone plays their assignment
+      switch (p.job) {
+        case "rush":
+          this.rushPasser(p, carrier, dt);
+          break;
+        case "man":
+          this.coverMan(p, dt);
+          break;
+        case "zone":
+          this.coverZone(p, dt);
+          break;
+        default:
+          this.spyQuarterback(p, carrier, dt);
       }
     }
+  }
+
+  /** pursue the ball carrier; blocked defenders are slowed so lanes can open */
+  private pursueCarrier(p: Player, carrier: Player, dt: number) {
+    const to = this.intercept(p, carrier);
+    this.moveToward(p, to.x, to.y, dt, p.blocked ? 0.4 : 1);
+  }
+
+  /** gap-discipline run fit: hold your gap at the LOS until the back commits,
+   * so the front doesn't all crash one point and a crease can open */
+  private runFit(p: Player, carrier: Player, dt: number) {
+    const dir = this.offDir();
+    const frontSeven = p.defRole === "DL" || p.defRole === "LB";
+    if (!frontSeven || p.gap === undefined) {
+      // DBs play contain / run support — stay a hair outside and behind
+      const to = this.intercept(p, carrier);
+      this.moveToward(p, to.x, to.y, dt, p.blocked ? 0.5 : 0.85);
+      return;
+    }
+    const gx = this.los + dir * 0.5 * YARD;
+    const gy = clamp(WORLD_H / 2 + p.gap * YARD, SIDELINE, WORLD_H - SIDELINE);
+    // hold the gap until the back is right on top of it, then attack downhill
+    const threat = dist(carrier.x, carrier.y, gx, gy) < 2.5 * YARD;
+    if (threat) {
+      const to = this.intercept(p, carrier);
+      this.moveToward(p, to.x, to.y, dt, p.blocked ? 0.4 : 1);
+    } else {
+      this.moveToward(p, gx, gy, dt, p.blocked ? 0.35 : 0.9);
+    }
+  }
+
+  private rushPasser(p: Player, carrier: Player | null, dt: number) {
+    const aim = carrier ?? { x: this.los, y: WORLD_H / 2, vx: 0, vy: 0 } as Player;
+    const to = carrier ? this.intercept(p, carrier) : { x: aim.x, y: aim.y };
+    this.moveToward(p, to.x, to.y, dt, p.blocked ? 0.4 : 1);
+  }
+
+  private spyQuarterback(p: Player, carrier: Player | null, dt: number) {
+    const dir = this.offDir();
+    const qb = carrier ?? null;
+    const tx = this.los + dir * 2 * YARD;
+    const ty = qb ? qb.y : WORLD_H / 2;
+    this.moveToward(p, tx, ty, dt, 0.7);
   }
 
   /** aim where the carrier WILL be, given pursuer speed (pure-pursuit lead) */
@@ -808,34 +965,28 @@ export class Game {
 
   private coverMan(p: Player, dt: number) {
     const cover = p.assignId ? this.byId(p.assignId) : null;
-    const carrier = this.carrier();
     if (!cover) {
-      // unassigned defender (a non-rushing LB) robs the short middle
-      if (carrier) this.moveToward(p, carrier.x, carrier.y, dt, 0.7);
+      this.spyQuarterback(p, this.carrier(), dt);
       return;
     }
     const dir = this.offDir();
     const press = this.defPlay.press ?? 0.6;
-    const cushion = lerp(2.4, 0.4, press); // yards on the goal side of the WR
+    const cushion = lerp(2.2, 0.3, press); // yards on the goal side of the WR
     const aim = this.intercept(p, cover);
     this.moveToward(p, aim.x + dir * cushion * YARD, aim.y, dt, 0.99);
   }
 
   private coverZone(p: Player, dt: number) {
     const lm = p.zone;
-    const carrier = this.carrier();
     if (!lm) {
-      if (carrier) this.moveToward(p, carrier.x, carrier.y, dt, 0.7);
+      this.spyQuarterback(p, this.carrier(), dt);
       return;
     }
-    const dir = this.offDir();
-    const zx = this.los + dir * lm.fwd * YARD;
-    const zy = clamp(WORLD_H / 2 + lm.lat * YARD, SIDELINE, WORLD_H - SIDELINE);
-    // jump the nearest receiver threatening this zone
+    // hold the zone landmark, but break on a receiver who enters the area
     let tgt: Player | null = null;
-    let bd = 4.8 * YARD;
+    let bd = 4.5 * YARD;
     for (const r of this.eligibleReceivers()) {
-      const d = dist(zx, zy, r.x, r.y);
+      const d = dist(lm.x, lm.y, r.x, r.y);
       if (d < bd) {
         bd = d;
         tgt = r;
@@ -843,9 +994,9 @@ export class Game {
     }
     if (tgt) {
       const aim = this.intercept(p, tgt);
-      this.moveToward(p, aim.x, aim.y, dt, 0.99);
+      this.moveToward(p, aim.x, aim.y, dt, 0.95);
     } else {
-      this.moveToward(p, zx, zy, dt, 0.9);
+      this.moveToward(p, lm.x, lm.y, dt, 0.85);
     }
   }
 
@@ -912,7 +1063,8 @@ export class Game {
     const offTeam = this.possession;
     const carrier = this.carrier();
     const dir = this.offDir();
-    // pocket pass-protect only while the QB still has it behind the LOS
+    const blockers = this.players.filter((p) => p.team === offTeam && p.role === "OL");
+
     const pocket =
       this.ball.inAir ||
       (carrier !== null &&
@@ -920,40 +1072,129 @@ export class Game {
         this.offPlay.kind === "pass" &&
         dir * (carrier.x - this.los) < 1 * YARD);
 
-    const blockers = this.players.filter(
-      (p) => p.team === offTeam && p.role === "OL"
-    );
-
-    if (!pocket && carrier) {
-      // ball is being carried downfield — linemen become lead blockers too
+    if (pocket || !carrier) {
+      this.passProtect(blockers, carrier);
+    } else if (this.offPlay.kind === "run") {
+      this.runBlock(blockers, carrier);
+    } else {
+      // scramble / after the catch — wall off pursuit
       for (const ol of blockers) this.downfieldBlock(ol, carrier, 0);
-      return;
     }
+  }
 
-    const rushers = this.players.filter(
-      (p) => p.team !== offTeam && (p.role === "DL" || p.role === "LB")
-    );
-    for (const ol of blockers) {
-      // find nearest rusher threatening the backfield
-      let tgt: Player | null = null;
+  /** assign each blocker to a rusher, inside-out; engaged rushers are sealed off */
+  private passProtect(blockers: Player[], carrier: Player | null) {
+    const protect = carrier ?? { x: this.los, y: WORLD_H / 2 };
+    const rush = this.players
+      .filter((p) => this.rushers.has(p.id))
+      .sort((a, b) => dist(a.x, a.y, protect.x, protect.y) - dist(b.x, b.y, protect.x, protect.y));
+    const avail = blockers.slice();
+    for (const r of rush) {
+      if (!avail.length) break; // outnumbered — this rusher comes free
+      let bi = 0;
       let bd = Infinity;
-      for (const r of rushers) {
-        const d = dist(ol.x, ol.y, r.x, r.y);
+      for (let i = 0; i < avail.length; i++) {
+        const d = dist(avail[i].x, avail[i].y, r.x, r.y);
         if (d < bd) {
           bd = d;
-          tgt = r;
+          bi = i;
         }
       }
-      if (tgt && bd < 6 * YARD) {
-        this.moveTowardRaw(ol, tgt.x, tgt.y, 1);
-        if (bd < BLOCK_R) {
-          tgt.blocked = true;
-          tgt.x += dir * 0.4; // shove the defender back a touch
-        }
-      } else {
+      this.engageBlock(avail.splice(bi, 1)[0], r, protect);
+    }
+    // spare blockers double the most dangerous rusher
+    for (const ol of avail) {
+      if (rush.length) this.engageBlock(ol, rush[0], protect);
+      else {
         ol.vx = 0;
         ol.vy = 0;
       }
+    }
+  }
+
+  /** a blocker mirrors a rusher, staying between him and the protect point */
+  private engageBlock(ol: Player, r: Player, protect: { x: number; y: number }) {
+    const dx = protect.x - r.x;
+    const dy = protect.y - r.y;
+    const d = Math.hypot(dx, dy) || 1;
+    // stand a step toward the QB from the rusher
+    this.moveTowardRaw(ol, r.x + (dx / d) * BLOCK_R * 0.7, r.y + (dy / d) * BLOCK_R * 0.7, 1);
+    if (dist(ol.x, ol.y, r.x, r.y) < BLOCK_R * 1.5) {
+      r.blocked = true;
+      // shove the rusher away from the protect point so he can't cross the blocker
+      r.x -= (dx / d) * 0.35;
+      r.y -= (dy / d) * 0.35;
+    }
+  }
+
+  /** run blocking: seal the front away from the hole; FB + puller lead through it */
+  private runBlock(blockers: Player[], carrier: Player) {
+    const dir = this.offDir();
+    const hole = this.offPlay.hole ?? 0;
+    const holeY = clamp(WORLD_H / 2 + hole * YARD, SIDELINE, WORLD_H - SIDELINE);
+    const front = this.players.filter(
+      (p) => p.team !== carrier.team && (p.defRole === "DL" || p.defRole === "LB")
+    );
+    const claimed = new Set<string>();
+    const pull = this.offPlay.pull;
+
+    // leads: the fullback and (if any) the pulling guard attack the hole's 2nd level
+    const leads = blockers.filter(
+      (ol) => ol.id.endsWith("_F") || (pull && ol.id.endsWith("_" + pull))
+    );
+    const sealers = blockers.filter((ol) => !leads.includes(ol));
+
+    const leadPt = { x: this.los + dir * 4 * YARD, y: holeY };
+    for (const ol of leads) {
+      // block the nearest unclaimed defender near/through the hole
+      let tgt: Player | null = null;
+      let bd = 6 * YARD;
+      for (const f of front) {
+        if (claimed.has(f.id)) continue;
+        const dd = dist(f.x, f.y, leadPt.x, leadPt.y);
+        if (dd < bd) {
+          bd = dd;
+          tgt = f;
+        }
+      }
+      if (tgt) {
+        claimed.add(tgt.id);
+        this.driveBlock(ol, tgt, dir, holeY);
+      } else {
+        this.moveTowardRaw(ol, this.los + dir * 6 * YARD, holeY, 1);
+      }
+    }
+
+    // block the defenders nearest the hole first, each by the closest free OL
+    const avail = sealers.slice();
+    const threats = front
+      .filter((f) => !claimed.has(f.id))
+      .sort((a, b) => Math.abs(a.y - holeY) - Math.abs(b.y - holeY));
+    for (const f of threats) {
+      if (!avail.length) break;
+      let bi = 0;
+      let bd = Infinity;
+      for (let i = 0; i < avail.length; i++) {
+        const d = dist(avail[i].x, avail[i].y, f.x, f.y);
+        if (d < bd) {
+          bd = d;
+          bi = i;
+        }
+      }
+      claimed.add(f.id);
+      this.driveBlock(avail.splice(bi, 1)[0], f, dir, holeY);
+    }
+    // leftover blockers climb toward the hole's second level
+    for (const ol of avail) this.moveTowardRaw(ol, this.los + dir * 3 * YARD, holeY, 0.8);
+  }
+
+  /** drive a defender downfield and away from the hole to open a lane */
+  private driveBlock(ol: Player, tgt: Player, dir: number, holeY: number) {
+    this.moveTowardRaw(ol, tgt.x + dir * 0.4 * YARD, tgt.y, 1);
+    if (dist(ol.x, ol.y, tgt.x, tgt.y) < BLOCK_R * 1.5) {
+      tgt.blocked = true;
+      tgt.x += dir * 0.3; // push back toward their own side
+      tgt.y += Math.sign(tgt.y - holeY || 1) * 0.3; // and away from the hole
     }
   }
 
@@ -1189,9 +1430,11 @@ export class Game {
     }
     // safety (tackled in own end zone) — checked via tackle below
 
-    // tackle on contact with any defender
+    // tackle on contact with any FREE defender (an engaged blocker can't make
+    // the tackle — this is what makes blocks matter and lanes/pockets hold)
     for (const p of this.players) {
       if (p.team === c.team) continue;
+      if (p.blocked) continue;
       if (dist(p.x, p.y, c.x, c.y) < TACKLE_R) {
         // small break-tackle chance when the user is sprinting
         if (

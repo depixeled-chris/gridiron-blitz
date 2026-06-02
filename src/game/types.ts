@@ -32,18 +32,35 @@ export interface OffensePlay {
   kind: "run" | "pass" | "fg" | "punt";
   /** which skill player carries on a run play */
   runner?: "RB" | "QB";
+  /** designed run hole: lateral yards from center toward the play side */
+  hole?: number;
+  /** which guard pulls to lead through the hole ("LG" | "RG"), gap scheme */
+  pull?: string;
   /** route per receiver slot, keyed by player id suffix */
   routes: Record<string, RouteNode[]>;
 }
 
+export type Coverage = "man" | "cover2" | "cover3" | "cover4";
+
 export interface DefensePlay {
   id: string;
   name: string;
-  coverage: "man" | "zone";
-  /** how aggressively the front seven rushes the passer (0..1) */
-  blitz: number;
-  /** press/jam tightness for man, 0..1 (ignored for zone) */
+  coverage: Coverage;
+  /** extra rushers sent beyond the down linemen (linebackers/DBs) */
+  blitzers: number;
+  /** press/jam tightness for man, 0..1 */
   press?: number;
+}
+
+export type DefRole = "DL" | "LB" | "CB" | "S";
+
+/** one defender slot in a defensive front (full 11-man personnel) */
+export interface DefSpot {
+  slot: string;
+  role: DefRole;
+  fwd: number;
+  lat: number;
+  num: number;
 }
 
 /** per-slot alignment override (yards) applied on top of the base formation */
@@ -64,9 +81,13 @@ export interface DefenseFormation {
   id: string;
   name: string;
   tag: string;
-  align?: Record<string, AlignOverride>;
+  /** full personnel + alignment for this front */
+  front: DefSpot[];
   plays: DefensePlay[];
 }
+
+/** a defender's job for the current play */
+export type Job = "rush" | "man" | "zone" | "spy";
 
 export interface Player {
   id: string;
@@ -89,10 +110,16 @@ export interface Player {
   /** snap origin in px, used by AI */
   ox: number;
   oy: number;
-  /** defender this player (OL) is blocking, or assignment for a DB */
+  /** defender this player (OL) is blocking, or assignment (man cover / pickup) */
   assignId?: string;
-  /** zone landmark (yards from LOS / midfield) for zone coverage */
-  zone?: { fwd: number; lat: number };
+  /** zone landmark (absolute world px) the defender holds in zone coverage */
+  zone?: { x: number; y: number };
+  /** defensive job for this play */
+  job?: Job;
+  /** defensive role sub-type (DL/LB/CB/S) for scheme logic */
+  defRole?: DefRole;
+  /** run-fit gap this defender owns (lateral yards from center) */
+  gap?: number;
   /** brief stun after a juke/block */
   stun: number;
   blocked: boolean;

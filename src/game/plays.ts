@@ -1,11 +1,11 @@
 import type {
   DefenseFormation,
+  DefensePlay,
   OffenseFormation,
   OffensePlay,
 } from "./types";
 
-// Base pre-snap alignment (yards: fwd = downfield, lat = toward bottom sideline).
-// Single source of truth shared by the engine and the formation diagrams.
+// Base offensive alignment (yards: fwd = downfield, lat = toward bottom sideline).
 export const OFFENSE_BASE: Record<string, { fwd: number; lat: number }> = {
   QB: { fwd: -3, lat: 0 },
   R: { fwd: -3, lat: 3 },
@@ -20,28 +20,25 @@ export const OFFENSE_BASE: Record<string, { fwd: number; lat: number }> = {
   C: { fwd: -0.5, lat: 5 },
 };
 
-export const DEFENSE_BASE: Record<string, { fwd: number; lat: number }> = {
-  LE: { fwd: 1, lat: -3.5 },
-  DT: { fwd: 1, lat: -1.2 },
-  NT: { fwd: 1, lat: 1.2 },
-  RE: { fwd: 1, lat: 3.5 },
-  WLB: { fwd: 4, lat: -6 },
-  MLB: { fwd: 4.5, lat: 0 },
-  SLB: { fwd: 4, lat: 6 },
-  CB1: { fwd: 6, lat: -10 },
-  CB2: { fwd: 6, lat: 10 },
-  SS: { fwd: 9, lat: 6 },
-  FS: { fwd: 12, lat: -3 },
-};
+// ---- offensive play library -------------------------------------------
+// routes keyed A (WR top) / B (WR bottom) / C (TE) / R (RB). Pass plays only
+// list real routes; run plays carry hole (lateral yds) + optional pull guard,
+// and short stalk/clearout routes for the non-carriers.
+const stalk = (s: number): { fwd: number; lat: number }[] => [{ fwd: 7, lat: s }];
+const runRoutes = (hole: number) => ({
+  A: stalk(-1),
+  B: stalk(1),
+  C: [{ fwd: 3, lat: hole > 0 ? 2 : -2 }],
+  R: [
+    { fwd: 1, lat: hole },
+    { fwd: 9, lat: hole },
+    { fwd: 18, lat: hole * 1.1 },
+  ],
+});
 
-// Receiver slots: A = WR top, B = WR bottom, C = TE, R = RB (swing).
-// Routes are lists of {fwd, lat} waypoints in yards from the player's snap spot.
-
-const P = {
+const PASS: Record<string, OffensePlay> = {
   slants: {
-    id: "slants",
-    name: "TWIN SLANTS",
-    kind: "pass",
+    id: "slants", name: "TWIN SLANTS", kind: "pass",
     routes: {
       A: [{ fwd: 4, lat: 0 }, { fwd: 12, lat: -6 }],
       B: [{ fwd: 4, lat: 0 }, { fwd: 12, lat: 6 }],
@@ -50,31 +47,16 @@ const P = {
     },
   },
   crossers: {
-    id: "crossers",
-    name: "CROSSERS",
-    kind: "pass",
+    id: "crossers", name: "CROSSERS", kind: "pass",
     routes: {
-      A: [{ fwd: 8, lat: 0 }, { fwd: 12, lat: 12 }],
-      B: [{ fwd: 8, lat: 0 }, { fwd: 12, lat: -12 }],
+      A: [{ fwd: 8, lat: 0 }, { fwd: 13, lat: 12 }],
+      B: [{ fwd: 8, lat: 0 }, { fwd: 13, lat: -12 }],
       C: [{ fwd: 14, lat: -4 }],
       R: [{ fwd: 0, lat: 8 }],
     },
   },
-  streaks: {
-    id: "streaks",
-    name: "GO DEEP",
-    kind: "pass",
-    routes: {
-      A: [{ fwd: 30, lat: -1 }],
-      B: [{ fwd: 30, lat: 1 }],
-      C: [{ fwd: 12, lat: 0 }],
-      R: [{ fwd: 2, lat: 9 }, { fwd: 10, lat: 9 }],
-    },
-  },
   fourverts: {
-    id: "fourverts",
-    name: "FOUR VERTS",
-    kind: "pass",
+    id: "fourverts", name: "FOUR VERTS", kind: "pass",
     routes: {
       A: [{ fwd: 32, lat: -1 }],
       B: [{ fwd: 32, lat: 1 }],
@@ -83,9 +65,7 @@ const P = {
     },
   },
   mesh: {
-    id: "mesh",
-    name: "MESH",
-    kind: "pass",
+    id: "mesh", name: "MESH", kind: "pass",
     routes: {
       A: [{ fwd: 5, lat: 0 }, { fwd: 6, lat: 14 }],
       B: [{ fwd: 5, lat: 0 }, { fwd: 6, lat: -14 }],
@@ -93,32 +73,62 @@ const P = {
       R: [{ fwd: 1, lat: 9 }],
     },
   },
-  pa_deep: {
-    id: "pa_deep",
-    name: "PLAY ACTION",
-    kind: "pass",
+  smash: {
+    id: "smash", name: "SMASH", kind: "pass",
     routes: {
-      A: [{ fwd: 28, lat: -2 }],
-      B: [{ fwd: 14, lat: 6 }, { fwd: 22, lat: 2 }],
-      C: [{ fwd: 16, lat: -3 }],
-      R: [{ fwd: 0, lat: 6 }],
+      A: [{ fwd: 6, lat: 0 }],
+      B: [{ fwd: 4, lat: 0 }, { fwd: 16, lat: -7 }],
+      C: [{ fwd: 3, lat: 6 }],
+      R: [{ fwd: 1, lat: 8 }],
+    },
+  },
+  flood: {
+    id: "flood", name: "FLOOD", kind: "pass",
+    routes: {
+      A: [{ fwd: 22, lat: 2 }],
+      B: [{ fwd: 10, lat: 9 }],
+      C: [{ fwd: 4, lat: 10 }],
+      R: [{ fwd: 2, lat: -8 }],
+    },
+  },
+  dagger: {
+    id: "dagger", name: "DAGGER", kind: "pass",
+    routes: {
+      A: [{ fwd: 26, lat: 0 }],
+      B: [{ fwd: 14, lat: 0 }, { fwd: 16, lat: -10 }],
+      C: [{ fwd: 12, lat: 2 }],
+      R: [{ fwd: 1, lat: 8 }],
+    },
+  },
+  outs: {
+    id: "outs", name: "DOUBLE OUTS", kind: "pass",
+    routes: {
+      A: [{ fwd: 8, lat: 0 }, { fwd: 9, lat: -6 }],
+      B: [{ fwd: 8, lat: 0 }, { fwd: 9, lat: 6 }],
+      C: [{ fwd: 5, lat: 0 }],
+      R: [{ fwd: 1, lat: 7 }],
+    },
+  },
+  hitches: {
+    id: "hitches", name: "HITCHES", kind: "pass",
+    routes: {
+      A: [{ fwd: 6, lat: 0 }],
+      B: [{ fwd: 6, lat: 0 }],
+      C: [{ fwd: 5, lat: 1 }],
+      R: [{ fwd: 1, lat: 6 }],
     },
   },
   fade: {
-    id: "fade",
-    name: "FADE",
-    kind: "pass",
+    id: "fade", name: "FADE", kind: "pass",
     routes: {
-      A: [{ fwd: 6, lat: -2 }, { fwd: 14, lat: -6 }],
-      B: [{ fwd: 6, lat: 2 }, { fwd: 14, lat: 6 }],
+      A: [{ fwd: 6, lat: -2 }, { fwd: 16, lat: -6 }],
+      B: [{ fwd: 6, lat: 2 }, { fwd: 16, lat: 6 }],
       C: [{ fwd: 5, lat: 1 }],
       R: [{ fwd: 1, lat: 7 }],
     },
   },
   bubble: {
-    id: "bubble",
-    name: "BUBBLE",
-    kind: "pass",
+    id: "bubble", name: "BUBBLE", kind: "pass",
     routes: {
       A: [{ fwd: -1, lat: -3 }, { fwd: 3, lat: -9 }],
       B: [{ fwd: 6, lat: 0 }],
@@ -126,204 +136,173 @@ const P = {
       R: [{ fwd: 1, lat: 8 }],
     },
   },
-  dive: {
-    id: "dive",
-    name: "HB DIVE",
-    kind: "run",
-    runner: "RB",
+  padeep: {
+    id: "padeep", name: "PLAY ACTION", kind: "pass",
     routes: {
-      A: [{ fwd: 12, lat: -2 }],
-      B: [{ fwd: 12, lat: 2 }],
-      C: [{ fwd: 6, lat: 0 }],
-      R: [{ fwd: 14, lat: 0 }],
+      A: [{ fwd: 28, lat: -2 }],
+      B: [{ fwd: 14, lat: 6 }, { fwd: 22, lat: 2 }],
+      C: [{ fwd: 16, lat: -3 }],
+      R: [{ fwd: 0, lat: 6 }],
     },
   },
-  sweep: {
-    id: "sweep",
-    name: "HB SWEEP",
-    kind: "run",
-    runner: "RB",
+  levels: {
+    id: "levels", name: "LEVELS", kind: "pass",
     routes: {
-      A: [{ fwd: 10, lat: -3 }],
-      B: [{ fwd: 6, lat: 10 }],
-      C: [{ fwd: 4, lat: 6 }],
-      R: [{ fwd: 2, lat: 12 }, { fwd: 16, lat: 14 }],
+      A: [{ fwd: 5, lat: 0 }, { fwd: 6, lat: 8 }],
+      B: [{ fwd: 11, lat: 0 }, { fwd: 12, lat: 8 }],
+      C: [{ fwd: 16, lat: -2 }],
+      R: [{ fwd: 1, lat: -7 }],
     },
   },
-  power: {
-    id: "power",
-    name: "POWER",
-    kind: "run",
-    runner: "RB",
+  postwheel: {
+    id: "postwheel", name: "POST-WHEEL", kind: "pass",
     routes: {
-      A: [{ fwd: 10, lat: -3 }],
-      B: [{ fwd: 8, lat: 3 }],
-      C: [{ fwd: 6, lat: -1 }],
-      R: [{ fwd: 2, lat: -3 }, { fwd: 14, lat: -5 }],
+      A: [{ fwd: 12, lat: 0 }, { fwd: 20, lat: 6 }],
+      B: [{ fwd: 2, lat: 0 }, { fwd: 18, lat: 11 }],
+      C: [{ fwd: 7, lat: -3 }],
+      R: [{ fwd: 1, lat: -7 }],
     },
   },
-  draw: {
-    id: "draw",
-    name: "DRAW",
-    kind: "run",
-    runner: "RB",
-    routes: {
-      A: [{ fwd: 14, lat: -2 }],
-      B: [{ fwd: 14, lat: 2 }],
-      C: [{ fwd: 8, lat: 0 }],
-      R: [{ fwd: -1, lat: 0 }, { fwd: 12, lat: 1 }],
-    },
-  },
-  qbkeep: {
-    id: "qbkeep",
-    name: "QB KEEPER",
-    kind: "run",
-    runner: "QB",
-    routes: {
-      A: [{ fwd: 14, lat: -3 }],
-      B: [{ fwd: 14, lat: 3 }],
-      C: [{ fwd: 8, lat: -2 }],
-      R: [{ fwd: 6, lat: -8 }],
-    },
-  },
-  sneak: {
-    id: "sneak",
-    name: "QB SNEAK",
-    kind: "run",
-    runner: "QB",
-    routes: {
-      A: [{ fwd: 6, lat: -2 }],
-      B: [{ fwd: 6, lat: 2 }],
-      C: [{ fwd: 3, lat: 1 }],
-      R: [{ fwd: 2, lat: 3 }],
-    },
-  },
-  punt: {
-    id: "punt",
-    name: "PUNT",
-    kind: "punt",
-    routes: { A: [], B: [], C: [], R: [] },
-  },
-  fieldgoal: {
-    id: "fieldgoal",
-    name: "FIELD GOAL",
-    kind: "fg",
-    routes: { A: [], B: [], C: [], R: [] },
-  },
-} satisfies Record<string, OffensePlay>;
+};
+
+const RUN: Record<string, OffensePlay> = {
+  dive: { id: "dive", name: "HB DIVE", kind: "run", runner: "RB", hole: 0, routes: runRoutes(0) },
+  iso: { id: "iso", name: "ISO", kind: "run", runner: "RB", hole: 1.5, routes: runRoutes(1.5) },
+  power: { id: "power", name: "POWER", kind: "run", runner: "RB", hole: 3, pull: "LG", routes: runRoutes(3) },
+  counter: { id: "counter", name: "COUNTER", kind: "run", runner: "RB", hole: -3, pull: "RG", routes: runRoutes(-3) },
+  sweep: { id: "sweep", name: "SWEEP", kind: "run", runner: "RB", hole: 9, pull: "RG", routes: runRoutes(9) },
+  toss: { id: "toss", name: "TOSS", kind: "run", runner: "RB", hole: 11, routes: runRoutes(11) },
+  draw: { id: "draw", name: "DRAW", kind: "run", runner: "RB", hole: 0, routes: runRoutes(0) },
+  trap: { id: "trap", name: "TRAP", kind: "run", runner: "RB", hole: 2, pull: "LG", routes: runRoutes(2) },
+  qbkeep: { id: "qbkeep", name: "QB KEEPER", kind: "run", runner: "QB", hole: 6, routes: runRoutes(6) },
+  sneak: { id: "sneak", name: "QB SNEAK", kind: "run", runner: "QB", hole: 0, routes: runRoutes(0) },
+};
+
+const SPECIAL: Record<string, OffensePlay> = {
+  punt: { id: "punt", name: "PUNT", kind: "punt", routes: { A: [], B: [], C: [], R: [] } },
+  fieldgoal: { id: "fieldgoal", name: "FIELD GOAL", kind: "fg", routes: { A: [], B: [], C: [], R: [] } },
+};
 
 export const OFFENSE_FORMATIONS: OffenseFormation[] = [
   {
-    id: "shotgun",
-    name: "SHOTGUN",
-    tag: "BALANCED",
-    plays: [P.slants, P.crossers, P.streaks, P.draw, P.qbkeep],
+    id: "shotgun", name: "SHOTGUN", tag: "BALANCED",
+    plays: [
+      PASS.slants, PASS.crossers, PASS.fourverts,
+      PASS.dagger, PASS.levels, PASS.outs,
+      RUN.draw, RUN.dive, RUN.qbkeep,
+    ],
   },
   {
-    id: "iform",
-    name: "I-FORM",
-    tag: "POWER RUN",
-    align: {
-      QB: { fwd: -1, lat: 0 },
-      R: { fwd: -5, lat: 0 },
-      F: { fwd: -2.7, lat: 0 },
-      A: { lat: -8 },
-      B: { lat: 8 },
-      C: { lat: 3.5 },
-    },
-    plays: [P.dive, P.sweep, P.power, P.pa_deep, P.qbkeep],
+    id: "iform", name: "I-FORM", tag: "POWER RUN",
+    align: { QB: { fwd: -1, lat: 0 }, R: { fwd: -5, lat: 0 }, F: { fwd: -2.7, lat: 0 }, A: { lat: -8 }, B: { lat: 8 }, C: { lat: 3.5 } },
+    plays: [
+      RUN.dive, RUN.iso, RUN.power,
+      RUN.counter, RUN.sweep, RUN.toss,
+      PASS.padeep, PASS.smash, PASS.postwheel,
+    ],
   },
   {
-    id: "spread",
-    name: "SPREAD",
-    tag: "PASS",
-    align: {
-      A: { lat: -12 },
-      B: { lat: 12 },
-      C: { fwd: -0.5, lat: 8 },
-      R: { fwd: -3, lat: 2 },
-      F: { fwd: -0.5, lat: -7 },
-    },
-    plays: [P.fourverts, P.mesh, P.slants, P.bubble, P.crossers],
+    id: "spread", name: "SPREAD", tag: "PASS",
+    align: { A: { lat: -12 }, B: { lat: 12 }, C: { fwd: -0.5, lat: 8 }, R: { fwd: -3, lat: 2 }, F: { fwd: -0.5, lat: -7 } },
+    plays: [
+      PASS.fourverts, PASS.mesh, PASS.crossers,
+      PASS.flood, PASS.bubble, PASS.smash,
+      PASS.levels, RUN.draw, RUN.sweep,
+    ],
   },
   {
-    id: "goalline",
-    name: "GOAL LINE",
-    tag: "SHORT YDG",
-    align: {
-      QB: { fwd: -1, lat: 0 },
-      R: { fwd: -3, lat: 0 },
-      F: { fwd: -2, lat: 0 },
-      A: { lat: -5 },
-      B: { lat: 5 },
-      C: { lat: 3 },
-    },
-    plays: [P.sneak, P.dive, P.fade],
+    id: "goalline", name: "GOAL LINE", tag: "SHORT YDG",
+    align: { QB: { fwd: -1, lat: 0 }, R: { fwd: -3, lat: 0 }, F: { fwd: -2, lat: 0 }, A: { lat: -5 }, B: { lat: 5 }, C: { lat: 3 } },
+    plays: [
+      RUN.sneak, RUN.dive, RUN.iso,
+      RUN.power, RUN.counter, PASS.fade,
+      PASS.smash, PASS.hitches, RUN.qbkeep,
+    ],
   },
   {
-    id: "special",
-    name: "SPECIAL TEAMS",
-    tag: "KICK",
-    align: {
-      QB: { fwd: -8, lat: 0 }, // punter / holder depth
-      R: { fwd: -7, lat: -2 }, // kicker
-    },
-    plays: [P.punt, P.fieldgoal],
+    id: "special", name: "SPECIAL TEAMS", tag: "KICK",
+    align: { QB: { fwd: -8, lat: 0 }, R: { fwd: -7, lat: -2 } },
+    plays: [SPECIAL.punt, SPECIAL.fieldgoal],
   },
 ];
 
+// ---- defensive coverage menu (shared across fronts) -------------------
+const COV: Record<string, DefensePlay> = {
+  man: { id: "man", name: "MAN PRESS", coverage: "man", blitzers: 0, press: 0.85 },
+  cover2: { id: "cover2", name: "COVER 2", coverage: "cover2", blitzers: 0 },
+  cover3: { id: "cover3", name: "COVER 3", coverage: "cover3", blitzers: 0 },
+  cover4: { id: "cover4", name: "COVER 4", coverage: "cover4", blitzers: 0 },
+  zoneblitz: { id: "zoneblitz", name: "ZONE BLITZ", coverage: "cover3", blitzers: 2 },
+  fireblitz: { id: "fireblitz", name: "FIRE ZONE", coverage: "cover2", blitzers: 2 },
+  manblitz: { id: "manblitz", name: "MAN BLITZ", coverage: "man", blitzers: 1, press: 0.8 },
+  allout: { id: "allout", name: "ALL-OUT BLITZ", coverage: "man", blitzers: 3, press: 0.7 },
+  prevent: { id: "prevent", name: "PREVENT", coverage: "cover4", blitzers: 0 },
+};
+
+const PASS_MENU = [COV.man, COV.cover2, COV.cover3, COV.cover4, COV.zoneblitz, COV.fireblitz, COV.manblitz, COV.allout, COV.prevent];
+const RUN_MENU = [COV.man, COV.cover2, COV.cover3, COV.manblitz, COV.zoneblitz, COV.fireblitz, COV.allout];
+
+const D = (slot: string, role: "DL" | "LB" | "CB" | "S", fwd: number, lat: number, num: number) =>
+  ({ slot, role, fwd, lat, num });
+
 export const DEFENSE_FORMATIONS: DefenseFormation[] = [
   {
-    id: "base",
-    name: "BASE 4-3",
-    tag: "BALANCED",
-    plays: [
-      { id: "cover2", name: "COVER 2 ZONE", coverage: "zone", blitz: 0.1 },
-      { id: "cover3", name: "COVER 3 ZONE", coverage: "zone", blitz: 0.2 },
-      { id: "man", name: "MAN PRESS", coverage: "man", blitz: 0.25, press: 0.9 },
+    id: "fourthree", name: "4-3", tag: "BASE",
+    front: [
+      D("DE1", "DL", 1, -4.5, 91), D("DT1", "DL", 1, -1.5, 94), D("DT2", "DL", 1, 1.5, 98), D("DE2", "DL", 1, 4.5, 56),
+      D("WLB", "LB", 4, -5, 54), D("MLB", "LB", 4.5, 0, 52), D("SLB", "LB", 4, 5, 58),
+      D("CB1", "CB", 5, -10, 24), D("CB2", "CB", 5, 10, 21),
+      D("FS", "S", 11, -5, 31), D("SS", "S", 10, 5, 33),
     ],
+    plays: PASS_MENU,
   },
   {
-    id: "nickel",
-    name: "NICKEL",
-    tag: "PASS D",
-    align: {
-      SLB: { fwd: 7, lat: 8 },
-      WLB: { fwd: 6, lat: -7 },
-    },
-    plays: [
-      { id: "man", name: "MAN PRESS", coverage: "man", blitz: 0.25, press: 0.9 },
-      { id: "cover3", name: "COVER 3 ZONE", coverage: "zone", blitz: 0.2 },
-      { id: "zoneblitz", name: "ZONE BLITZ", coverage: "zone", blitz: 0.75 },
+    id: "threefour", name: "3-4", tag: "VERSATILE",
+    front: [
+      D("DE1", "DL", 1, -4, 95), D("NT", "DL", 1, 0, 98), D("DE2", "DL", 1, 4, 91),
+      D("OLB1", "LB", 3, -7, 55), D("ILB1", "LB", 4, -2, 52), D("ILB2", "LB", 4, 2, 54), D("OLB2", "LB", 3, 7, 58),
+      D("CB1", "CB", 5, -10, 24), D("CB2", "CB", 5, 10, 21),
+      D("FS", "S", 11, -4, 31), D("SS", "S", 10, 4, 33),
     ],
+    plays: PASS_MENU,
   },
   {
-    id: "blitz",
-    name: "BLITZ",
-    tag: "PRESSURE",
-    align: {
-      WLB: { fwd: 2.5, lat: -5 },
-      MLB: { fwd: 3, lat: 0 },
-      SLB: { fwd: 2.5, lat: 5 },
-    },
-    plays: [
-      { id: "zoneblitz", name: "ZONE BLITZ", coverage: "zone", blitz: 0.8 },
-      { id: "blitz", name: "ALL-OUT BLITZ", coverage: "man", blitz: 1.0, press: 0.7 },
+    id: "nickel", name: "NICKEL", tag: "PASS D",
+    front: [
+      D("DE1", "DL", 1, -4.5, 91), D("DT1", "DL", 1, -1.5, 94), D("DT2", "DL", 1, 1.5, 98), D("DE2", "DL", 1, 4.5, 56),
+      D("WLB", "LB", 4, -3, 54), D("MLB", "LB", 4.5, 3, 52),
+      D("CB1", "CB", 5, -10, 24), D("CB2", "CB", 5, 10, 21), D("NB", "CB", 5, 5, 27),
+      D("FS", "S", 12, -5, 31), D("SS", "S", 11, 5, 33),
     ],
+    plays: PASS_MENU,
   },
   {
-    id: "prevent",
-    name: "PREVENT",
-    tag: "DEEP",
-    align: {
-      CB1: { fwd: 10, lat: -10 },
-      CB2: { fwd: 10, lat: 10 },
-      SS: { fwd: 14, lat: 6 },
-      FS: { fwd: 18, lat: -3 },
-    },
-    plays: [
-      { id: "prevent", name: "PREVENT", coverage: "zone", blitz: 0.0 },
-      { id: "cover3", name: "COVER 3 ZONE", coverage: "zone", blitz: 0.15 },
+    id: "dime", name: "DIME", tag: "DEEP PASS D",
+    front: [
+      D("DE1", "DL", 1, -4.5, 91), D("DT1", "DL", 1, -1.5, 94), D("DT2", "DL", 1, 1.5, 98), D("DE2", "DL", 1, 4.5, 56),
+      D("MLB", "LB", 5, 0, 52),
+      D("CB1", "CB", 5, -10, 24), D("CB2", "CB", 5, 10, 21), D("NB", "CB", 5, -5, 27), D("DB4", "CB", 5, 5, 28),
+      D("FS", "S", 12, -5, 31), D("SS", "S", 12, 5, 33),
     ],
+    plays: PASS_MENU,
+  },
+  {
+    id: "fivetwo", name: "5-2", tag: "RUN STUFF",
+    front: [
+      D("DE1", "DL", 1, -6, 91), D("DT1", "DL", 1, -3, 94), D("NT", "DL", 1, 0, 98), D("DT2", "DL", 1, 3, 96), D("DE2", "DL", 1, 6, 56),
+      D("WLB", "LB", 4, -3, 54), D("SLB", "LB", 4, 3, 58),
+      D("CB1", "CB", 5, -10, 24), D("CB2", "CB", 5, 10, 21),
+      D("FS", "S", 11, -4, 31), D("SS", "S", 10, 4, 33),
+    ],
+    plays: RUN_MENU,
+  },
+  {
+    id: "goalline", name: "GOAL LINE", tag: "SHORT YDG",
+    front: [
+      D("DE1", "DL", 1, -7, 91), D("DT1", "DL", 1, -4, 94), D("NT1", "DL", 1, -1.5, 98), D("NT2", "DL", 1, 1.5, 96), D("DT2", "DL", 1, 4, 90), D("DE2", "DL", 1, 7, 56),
+      D("WLB", "LB", 3, -4, 54), D("MLB", "LB", 3, 0, 52), D("SLB", "LB", 3, 4, 58),
+      D("CB1", "CB", 4, -9, 24), D("CB2", "CB", 4, 9, 21),
+    ],
+    plays: RUN_MENU,
   },
 ];
