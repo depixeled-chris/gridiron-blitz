@@ -740,17 +740,26 @@ export class Game {
         continue;
       }
 
-      // once a teammate is carrying the ball, become a downfield blocker
-      if (carrier && !isCarrier) {
+      const dir = this.offDir();
+      // Block downfield ONLY once the ball is actually being run — a handoff,
+      // a catch-and-run, or a QB scramble past the line. While the QB is in the
+      // pocket on a pass, receivers run their routes (this was the bug: the QB
+      // counts as the carrier, so receivers were blocking instead of running).
+      const qbInPocket =
+        carrier !== null &&
+        carrier.role === "QB" &&
+        this.offPlay.kind === "pass" &&
+        dir * (carrier.x - this.los) < 1 * YARD;
+
+      if (carrier && !isCarrier && !qbInPocket) {
         this.downfieldBlock(p, carrier, dt);
         continue;
       }
 
-      // otherwise run the route
+      // run the route
       if (p.route && p.routeIdx < p.route.length) {
         this.followRoute(p, dt);
       } else if (p.route) {
-        const dir = this.offDir();
         this.moveToward(p, p.x + dir * YARD, p.y, dt, 0.55);
       }
     }
