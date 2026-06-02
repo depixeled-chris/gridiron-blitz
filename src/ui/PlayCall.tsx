@@ -100,7 +100,7 @@ export function PlayCall({
             onClick={() => onPick(formation.id, p.id)}
           >
             <span className="pc-key">{i + 1}</span>
-            <PlayArt play={p} offense={onOffense} />
+            <PlayArt play={p} formation={formation} offense={onOffense} />
             <span className="pc-name">{p.name}</span>
             <span className="pc-kind">{kindLabel(p, onOffense)}</span>
           </button>
@@ -195,94 +195,166 @@ function FormationArt({
   );
 }
 
-function PlayArt({ play, offense }: { play: AnyPlay; offense: boolean }) {
-  const W = 120;
-  const H = 80;
-  const cx = W / 2;
-  const los = H * 0.62;
+const W = 120;
+const H = 80;
+const PAD = 12;
+
+/** build a coordinate mapper that fits all (lat, fwd) points into the card */
+function fitter(pts: { lat: number; fwd: number }[]) {
+  const lats = pts.map((p) => p.lat);
+  const fwds = pts.map((p) => p.fwd);
+  const minLat = Math.min(...lats) - 1.5;
+  const maxLat = Math.max(...lats) + 1.5;
+  const minFwd = Math.min(...fwds) - 1.5;
+  const maxFwd = Math.max(...fwds) + 1.5;
+  const sx = (W - 2 * PAD) / Math.max(0.1, maxLat - minLat);
+  const sy = (H - 2 * PAD) / Math.max(0.1, maxFwd - minFwd);
+  // downfield (larger fwd) maps toward the TOP of the card
+  return (lat: number, fwd: number) => ({
+    x: PAD + (lat - minLat) * sx,
+    y: PAD + (maxFwd - fwd) * sy,
+  });
+}
+
+function effPos(
+  base: Record<string, { fwd: number; lat: number }>,
+  align: Record<string, { fwd?: number; lat?: number }>
+) {
+  const out: Record<string, { fwd: number; lat: number }> = {};
+  for (const slot of Object.keys(base)) {
+    const ov = align[slot] ?? {};
+    out[slot] = { fwd: ov.fwd ?? base[slot].fwd, lat: ov.lat ?? base[slot].lat };
+  }
+  return out;
+}
+
+function PlayArt({
+  play,
+  formation,
+  offense,
+}: {
+  play: AnyPlay;
+  formation: AnyFormation;
+  offense: boolean;
+}) {
+  const align = formation.align ?? {};
+
   if (offense) {
     const op = play as OffensePlay;
-    if (op.kind === "fg" || op.kind === "punt") {
-      return (
-        <svg className="pc-art" viewBox={`0 0 ${W} ${H}`}>
-          <line x1="6" y1={los} x2={W - 6} y2={los} stroke="#7fd49a" strokeWidth="1" />
-          <path
-            d={`M ${cx} ${los + 8} Q ${cx + 20} ${los - 40} ${W - 16} 14`}
-            fill="none"
-            stroke="#ffd34d"
-            strokeWidth="1.8"
-            strokeDasharray="3 3"
-          />
-          {op.kind === "fg" && (
-            <g stroke="#fff" strokeWidth="2">
-              <line x1={W - 22} y1="6" x2={W - 22} y2="26" />
-              <line x1={W - 12} y1="6" x2={W - 12} y2="26" />
-              <line x1={W - 27} y1="16" x2={W - 7} y2="16" />
-            </g>
-          )}
-          <ellipse cx={cx} cy={los + 9} rx="3.5" ry="2.4" fill="#7a4012" />
-        </svg>
-      );
+    const pos = effPos(OFFENSE_BASE, align);
+
+    // every point we need to fit: all players + route waypoints
+    const pts = Object.values(pos).map((p) => ({ ...p }));
+    const routes: { slot: string; pts: { lat: number; fwd: number }[]; run: boolean }[] = [];
+    if (op.kind === "pass" || op.kind === "run") {
+      for (const slot of ["A", "B", "C", "R"]) {
+        const nodes = op.routes[slot];
+        if (!nodes?.length) continue;
+        const s = pos[slot];
+        const wp = nodes.map((n) => ({ lat: s.lat + n.lat, fwd: s.fwd + n.fwd }));
+        wp.forEach((w) => pts.push(w));
+        routes.push({
+          slot,
+          pts: [{ lat: s.lat, fwd: s.fwd }, ...wp],
+          run: op.kind === "run" && slot === "R",
+        });
+      }
     }
+    // kicks: show the ball flying downfield from the holder
+    if (op.kind === "fg" || op.kind === "punt") {
+      pts.push({ lat: 0, fwd: 18 });
+    }
+
+    const map = fitter(pts);
     return (
       <svg className="pc-art" viewBox={`0 0 ${W} ${H}`}>
-        <line x1="6" y1={los} x2={W - 6} y2={los} stroke="#7fd49a" strokeWidth="1" />
-        {Object.entries(op.routes).map(([slot, nodes]) => {
-          if (!nodes.length) return null;
-          const start = slotStart(slot, W, los);
-          let d = `M ${start.x} ${start.y}`;
-          let px = start.x;
-          let py = start.y;
-          for (const n of nodes) {
-            px = start.x + n.lat * 3.0;
-            py = start.y - n.fwd * 1.9;
-            d += ` L ${px} ${py}`;
-          }
-          const color = op.kind === "run" && slot === "R" ? "#ffd34d" : "#8fb8ff";
+        {/* players for context */}
+        {Object.entries(pos).map(([slot, p]) => {
+          const m = map(p.lat, p.fwd);
+          const skill = slot === "QB" || slot === "R" || slot === "A" || slot === "B" || slot === "C";
           return (
-            <g key={slot}>
-              <path d={d} fill="none" stroke={color} strokeWidth="1.6" />
-              <circle cx={start.x} cy={start.y} r="2.2" fill="#fff" />
-              <circle cx={px} cy={py} r="1.6" fill={color} />
+            <circle
+              key={slot}
+              cx={m.x}
+              cy={m.y}
+              r={slot === "QB" ? 2.8 : 2.2}
+              fill={slot === "QB" ? "#fff" : skill ? "#9fb6e0" : "#5e6f93"}
+            />
+          );
+        })}
+        {/* routes */}
+        {routes.map((r) => {
+          const d = r.pts
+            .map((p, i) => {
+              const m = map(p.lat, p.fwd);
+              return `${i ? "L" : "M"} ${m.x.toFixed(1)} ${m.y.toFixed(1)}`;
+            })
+            .join(" ");
+          const end = map(r.pts[r.pts.length - 1].lat, r.pts[r.pts.length - 1].fwd);
+          const color = r.run ? "#ffd34d" : "#8fb8ff";
+          return (
+            <g key={r.slot}>
+              <path d={d} fill="none" stroke={color} strokeWidth="1.7" strokeLinejoin="round" />
+              <circle cx={end.x} cy={end.y} r="1.7" fill={color} />
             </g>
           );
         })}
-        <circle cx={cx} cy={los + 9} r="3" fill="#fff" stroke="#222" />
+        {/* kick arc + uprights */}
+        {(op.kind === "fg" || op.kind === "punt") &&
+          (() => {
+            const s = map(pos.QB.lat, pos.QB.fwd);
+            const e = map(0, 18);
+            const cxp = (s.x + e.x) / 2;
+            return (
+              <g>
+                <path
+                  d={`M ${s.x} ${s.y} Q ${cxp} ${e.y - 18} ${e.x} ${e.y}`}
+                  fill="none"
+                  stroke="#ffd34d"
+                  strokeWidth="1.8"
+                  strokeDasharray="3 3"
+                />
+                {op.kind === "fg" && (
+                  <g stroke="#fff" strokeWidth="1.8">
+                    <line x1={e.x - 6} y1={e.y - 10} x2={e.x - 6} y2={e.y + 4} />
+                    <line x1={e.x + 6} y1={e.y - 10} x2={e.x + 6} y2={e.y + 4} />
+                    <line x1={e.x - 9} y1={e.y - 2} x2={e.x + 9} y2={e.y - 2} />
+                  </g>
+                )}
+              </g>
+            );
+          })()}
       </svg>
     );
   }
+
+  // defense: front from the formation + coverage / blitz indicators
   const dp = play as DefensePlay;
+  const pos = effPos(DEFENSE_BASE, align);
+  const pts = Object.values(pos).map((p) => ({ ...p }));
+  const map = fitter(pts);
+  const rushers = ["LE", "DT", "NT", "RE"].concat(dp.blitz >= 0.7 ? ["WLB", "MLB", "SLB"] : []);
   return (
     <svg className="pc-art" viewBox={`0 0 ${W} ${H}`}>
-      <line x1="6" y1={los} x2={W - 6} y2={los} stroke="#e09a9a" strokeWidth="1" />
-      {[-30, -10, 10, 30].map((dx, i) => (
-        <g key={i}>
-          <circle cx={cx + dx} cy={los - 8} r="3" fill="#e23b3b" />
-          {dp.blitz > 0.5 && (
-            <line x1={cx + dx} y1={los - 8} x2={cx + dx} y2={los + 10} stroke="#ffd34d" strokeWidth="1.4" />
-          )}
-        </g>
-      ))}
-      {[-22, 22].map((dx, i) => (
-        <circle key={i} cx={cx + dx} cy={los - 26} r="3" fill="#ff7a7a" />
-      ))}
-      {dp.coverage === "zone" && <circle cx={cx} cy={14} r="3" fill="#ff7a7a" />}
+      {Object.entries(pos).map(([slot, p]) => {
+        const m = map(p.lat, p.fwd);
+        const isRush = rushers.includes(slot);
+        return (
+          <g key={slot}>
+            {isRush && (
+              <line
+                x1={m.x}
+                y1={m.y}
+                x2={m.x}
+                y2={m.y + 9}
+                stroke="#ffd34d"
+                strokeWidth="1.4"
+              />
+            )}
+            <circle cx={m.x} cy={m.y} r={slot === "MLB" ? 2.8 : 2.4} fill={slot.startsWith("CB") || slot === "SS" || slot === "FS" ? "#ff9d9d" : "#e23b3b"} />
+          </g>
+        );
+      })}
     </svg>
   );
-}
-
-function slotStart(slot: string, W: number, los: number) {
-  const cx = W / 2;
-  switch (slot) {
-    case "A":
-      return { x: 16, y: los };
-    case "B":
-      return { x: W - 16, y: los };
-    case "C":
-      return { x: cx + 16, y: los };
-    case "R":
-      return { x: cx + 8, y: los + 12 };
-    default:
-      return { x: cx, y: los };
-  }
 }
