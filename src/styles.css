@@ -39,14 +39,16 @@ body {
   overflow: hidden;
 }
 
-/* size to the *visible* viewport (vars set from window.visualViewport),
-   falling back to dvh/vw before JS runs */
+/* size to the *visible* viewport (vars set from window.visualViewport) and shift
+   by its offset so the top browser bar is accounted for. `svh` fallback = the
+   smallest viewport, so it fits even before JS runs / with bars shown. */
 .app {
   position: fixed;
   top: 0;
   left: 0;
   width: var(--vvw, 100vw);
-  height: var(--vvh, 100dvh);
+  height: var(--vvh, 100svh);
+  transform: translate(var(--vvl, 0px), var(--vvt, 0px));
   overflow: hidden;
 }
 
@@ -384,6 +386,17 @@ body {
 }
 .controls .hint b {
   color: #fff;
+}
+
+/* ---- build tag (debug) ---- */
+.build-tag {
+  position: fixed;
+  left: calc(4px + env(safe-area-inset-left));
+  bottom: calc(2px + env(safe-area-inset-bottom));
+  z-index: 40;
+  font: 10px/1 monospace;
+  color: rgba(255, 255, 255, 0.35);
+  pointer-events: none;
 }
 
 /* ---- install banner ---- */

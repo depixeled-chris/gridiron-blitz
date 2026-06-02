@@ -13,9 +13,15 @@ function apply() {
   const vv = window.visualViewport;
   const w = Math.round(vv?.width ?? window.innerWidth);
   const h = Math.round(vv?.height ?? window.innerHeight);
+  // offset of the visible area within the layout viewport — this is the space
+  // taken by the browser's top bar that position:fixed otherwise ignores.
+  const top = Math.round(vv?.offsetTop ?? 0);
+  const left = Math.round(vv?.offsetLeft ?? 0);
   const s = document.documentElement.style;
   s.setProperty("--vvw", `${w}px`);
   s.setProperty("--vvh", `${h}px`);
+  s.setProperty("--vvt", `${top}px`);
+  s.setProperty("--vvl", `${left}px`);
   callbacks.forEach((cb) => cb());
 }
 

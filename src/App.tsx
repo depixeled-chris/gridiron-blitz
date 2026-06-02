@@ -9,6 +9,7 @@ import { Controls } from "./ui/Controls";
 import { TouchControls } from "./ui/TouchControls";
 import { InstallBanner } from "./ui/InstallBanner";
 import { onViewportChange } from "./viewport";
+import { BUILD } from "./version";
 
 const EMPTY: HudState = {
   phase: "menu",
@@ -105,6 +106,8 @@ export function App() {
         <div className="rotate-icon">⤾</div>
         Rotate to landscape to play
       </div>
+
+      <div className="build-tag">{BUILD}</div>
 
       <InstallBanner />
     </div>
