@@ -21,6 +21,7 @@ export const CATCH_R = 1.3 * YARD;
 export const BLOCK_R = 1.1 * YARD;
 
 export const TURBO = 1.28;
+export const SHED_TIME = 1.3; // seconds a block holds before the defender sheds
 
 // speeds, yards/sec
 export const SPEED: Record<string, number> = {

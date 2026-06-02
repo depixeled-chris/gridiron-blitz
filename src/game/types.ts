@@ -123,6 +123,8 @@ export interface Player {
   /** brief stun after a juke/block */
   stun: number;
   blocked: boolean;
+  /** seconds this defender has been continuously engaged by a block */
+  engaged: number;
 }
 
 export interface BallState {

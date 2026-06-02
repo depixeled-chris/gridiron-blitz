@@ -14,6 +14,7 @@ import {
   QUARTER_SECONDS,
   REACH,
   RIGHT_GOAL,
+  SHED_TIME,
   SIDELINE,
   SPEED,
   TACKLE_R,
@@ -122,6 +123,7 @@ export class Game {
   private deadTimer = 0;
   private snapTimer = 0;
   private throwTimer = 0; // AI QB drop timer
+  private liveTime = 0; // seconds the current play has been live
   private switchCooldown = 0;
   private rushers = new Set<string>(); // defenders rushing the passer this play
   private lastHud = "";
@@ -249,6 +251,16 @@ export class Game {
   }
   debugPhase() {
     return this.phase;
+  }
+  debugOffense() {
+    return {
+      formation: this.offFormation.id,
+      play: this.offPlay.id,
+      kind: this.offPlay.kind,
+      throwTimer: Math.round(this.throwTimer * 100) / 100,
+      carrier: this.ball.carrier,
+      inAir: this.ball.inAir,
+    };
   }
   debugDefense() {
     const defTeam: Team = this.possession === "home" ? "away" : "home";
@@ -522,6 +534,7 @@ export class Game {
   private snap() {
     this.phase = "live";
     this.throwTimer = 0;
+    this.liveTime = 0;
     this.kickMode = null;
     const offTeam = this.possession;
     const ball = this.ball;
@@ -550,6 +563,7 @@ export class Game {
 
   // ---- special teams -----------------------------------------------------
   private startKick(kind: "fg" | "punt") {
+    this.liveTime = 0;
     const dir = this.offDir();
     const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
     const b = this.ball;
@@ -673,10 +687,15 @@ export class Game {
     }
 
     this.throwTimer += dt;
+    this.liveTime += dt;
     if (this.switchCooldown > 0) this.switchCooldown -= dt;
 
-    // reset per-frame block flags
-    for (const p of this.players) p.blocked = false;
+    // age engagement from last frame's blocks, then clear for this frame
+    for (const p of this.players) {
+      if (p.blocked) p.engaged += dt;
+      else p.engaged = Math.max(0, p.engaged - 2 * dt);
+      p.blocked = false;
+    }
 
     this.updateBlocking();
     this.updateOffense(dt);
@@ -686,6 +705,18 @@ export class Game {
     this.separate();
     this.clampPositions();
     this.checkTackleAndScore();
+
+    // safety net: never let a play hang forever
+    if (this.phase === "live" && this.liveTime > 14) {
+      const c = this.carrier();
+      if (c) this.endPlay({ type: "tackle", spotX: c.x, spotY: c.y });
+      else this.endPlay({ type: "incomplete" });
+    }
+  }
+
+  /** a defender is taken out of the play only while a block still holds */
+  private neutralized(p: Player) {
+    return p.blocked && p.engaged < SHED_TIME;
   }
 
   private clampPositions() {
@@ -806,10 +837,10 @@ export class Game {
       p.vx = 0;
       p.vy = 0;
     }
-    // pressure check — scramble if a defender is close
+    // get the ball out before the pocket sheds (~1.3s) or under pressure
     const rush = this.nearestOpp(p);
     const pressured = rush && dist(p.x, p.y, rush.x, rush.y) < 2.4 * YARD;
-    if (this.throwTimer > 1.1 || pressured) {
+    if (this.throwTimer > 1.0 || pressured) {
       const tgt = this.bestReceiver();
       if (tgt) this.throwTo(tgt.id);
     }
@@ -914,7 +945,7 @@ export class Game {
   /** pursue the ball carrier; blocked defenders are slowed so lanes can open */
   private pursueCarrier(p: Player, carrier: Player, dt: number) {
     const to = this.intercept(p, carrier);
-    this.moveToward(p, to.x, to.y, dt, p.blocked ? 0.4 : 1);
+    this.moveToward(p, to.x, to.y, dt, this.neutralized(p) ? 0.4 : 1);
   }
 
   /** gap-discipline run fit: hold your gap at the LOS until the back commits,
@@ -925,7 +956,7 @@ export class Game {
     if (!frontSeven || p.gap === undefined) {
       // DBs play contain / run support — stay a hair outside and behind
       const to = this.intercept(p, carrier);
-      this.moveToward(p, to.x, to.y, dt, p.blocked ? 0.5 : 0.85);
+      this.moveToward(p, to.x, to.y, dt, this.neutralized(p) ? 0.5 : 0.85);
       return;
     }
     const gx = this.los + dir * 0.5 * YARD;
@@ -934,16 +965,16 @@ export class Game {
     const threat = dist(carrier.x, carrier.y, gx, gy) < 2.5 * YARD;
     if (threat) {
       const to = this.intercept(p, carrier);
-      this.moveToward(p, to.x, to.y, dt, p.blocked ? 0.4 : 1);
+      this.moveToward(p, to.x, to.y, dt, this.neutralized(p) ? 0.4 : 1);
     } else {
-      this.moveToward(p, gx, gy, dt, p.blocked ? 0.35 : 0.9);
+      this.moveToward(p, gx, gy, dt, this.neutralized(p) ? 0.35 : 0.9);
     }
   }
 
   private rushPasser(p: Player, carrier: Player | null, dt: number) {
     const aim = carrier ?? { x: this.los, y: WORLD_H / 2, vx: 0, vy: 0 } as Player;
     const to = carrier ? this.intercept(p, carrier) : { x: aim.x, y: aim.y };
-    this.moveToward(p, to.x, to.y, dt, p.blocked ? 0.4 : 1);
+    this.moveToward(p, to.x, to.y, dt, this.neutralized(p) ? 0.4 : 1);
   }
 
   private spyQuarterback(p: Player, carrier: Player | null, dt: number) {
@@ -1443,7 +1474,7 @@ export class Game {
     // the tackle — this is what makes blocks matter and lanes/pockets hold)
     for (const p of this.players) {
       if (p.team === c.team) continue;
-      if (p.blocked) continue;
+      if (this.neutralized(p)) continue;
       if (dist(p.x, p.y, c.x, c.y) < TACKLE_R) {
         // small break-tackle chance when the user is sprinting
         if (
@@ -1907,6 +1938,7 @@ function basePlayer(id: string, team: Team, f: FormSpot): Player {
     oy: 0,
     stun: 0,
     blocked: false,
+    engaged: 0,
   };
 }
 
