@@ -2078,7 +2078,11 @@ export class Game {
     const ACC = rate(r, "ACC");
     const AGI = rate(r, "AGI");
     p.vmax = (8.0 + (SPD - 70) * 0.075) * YARD; // ~6.5..10.2 yd/s
-    p.vacc = 116 + (ACC - 70) * 4; // px/s^2: 0->top in ~1.6-1.8s
+    // 0->top in ~0.8-1.0s (was ~1.35s, which made a 5yd-deep i-form back crawl to
+    // the LOS at half speed and meet the converged defense with no juice — a hidden
+    // cause of the high stuff rate; see N-001/GB-T001). Kept moderate so the back
+    // doesn't outrun his own blocking development.
+    p.vacc = 200 + (ACC - 70) * 5; // px/s^2
     p.vturn = 650 + (AGI - 70) * 8; // px/s^2: full-speed turn radius ~2.4-4yd
   }
 
@@ -2194,8 +2198,11 @@ export class Game {
         def: defR,
         kind: "tackle",
         firstContact: true,
-        // tackling is the default outcome (+12); each extra converging defender
+        // tackling is the default outcome (+10); each extra converging defender
         // makes a break far less likely (+13); a sprinting human gets a nudge.
+        // NOTE (GB-T001): lowering these INCREASES stuffs (counterintuitive
+        // feedback loop in the break/burst dynamics — see N-001). Do not lower
+        // without instrumenting why first.
         leverage: 10 + (gang - 1) * 13 - (userTurbo ? 8 : 0),
         momentum: -spd * 12, // a back at full speed runs through arm tackles
       });
