@@ -1729,8 +1729,16 @@ export class Game {
 
   /** drive a defender off the ball and away from the hole; kernel decides the rep */
   private driveBlock(ol: Player, tgt: Player, dir: number, holeY: number, dbl: boolean, dt: number) {
+    // get-off: the OL fire out on the snap count (the DL react), so they win the
+    // initial leverage and ENGAGE fast — blocks must be formed by ~0.7s or a fast
+    // back outruns them into unblocked DL (GB-T004). Burst the first ~0.6s.
+    if (this.liveTime < 0.6) ol.burst = Math.max(ol.burst, 0.6 - this.liveTime);
     this.moveTowardRaw(ol, tgt.x + dir * 0.4 * YARD, tgt.y, 1);
-    if (dist(ol.x, ol.y, tgt.x, tgt.y) < BLOCK_R * 1.6) {
+    // engage from snap-alignment range so the block LATCHES before the DL can
+    // fire upfield past the blocker — early in the play the OL reaches across the
+    // gap (they're ~1yd apart at the snap). The range tightens once the rep is on.
+    const engageR = this.liveTime < 0.5 ? BLOCK_R * 3.4 : BLOCK_R * 1.9;
+    if (dist(ol.x, ol.y, tgt.x, tgt.y) < engageR) {
       // run blocks favor the blocker: the OL fires out on the snap count while the
       // DL reacts, so run-block win rate is ~75%, not the 50/50 of an even pass rep.
       // (lev<0 slows the defender's shed.) Without this the front over-penetrated
