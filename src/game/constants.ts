@@ -35,7 +35,7 @@ export const SPEED: Record<string, number> = {
   DB: 9.6,
 };
 
-export const PASS_SPEED = 11 * YARD; // px/sec ground speed of a thrown ball (~3x slower so the flight reads)
+export const PASS_SPEED = 22 * YARD; // px/sec ground speed of a thrown ball (visible flight, still catchable)
 export const KICK_SPEED = 26 * YARD; // px/sec for FG/punt flight (kept faster than a pass)
 
 // passing arc / height model (z axis, in px)

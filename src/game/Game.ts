@@ -1,13 +1,11 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import {
   BLOCK_R,
-  BLOCKED_REACH,
   CATCH_R,
   COLORS,
   DEFLECT_R,
   ENDZONE,
   FIELD_YARDS,
-  INT_CHANCE,
   KICK_SPEED,
   LEFT_GOAL,
   PASS_SPEED,
@@ -18,7 +16,6 @@ import {
   SIDELINE,
   SPEED,
   TACKLE_R,
-  TIP_CHANCE,
   TURBO,
   VIEW_H,
   VIEW_W,
@@ -296,14 +293,23 @@ export class Game {
   }
   debugBall() {
     const b = this.ball;
+    const tgt = b.targetId ? this.byId(b.targetId) : null;
     return {
-      x: b.x,
-      y: b.y,
-      z: b.z,
+      x: Math.round(b.x),
+      y: Math.round(b.y),
+      z: Math.round(b.z),
       inAir: b.inAir,
       carrier: b.carrier,
-      t: b.t,
+      t: Math.round(b.t * 100) / 100,
       peak: b.peak,
+      tx: Math.round(b.tx),
+      ty: Math.round(b.ty),
+      targetId: b.targetId,
+      tgtX: tgt ? Math.round(tgt.x) : null,
+      tgtY: tgt ? Math.round(tgt.y) : null,
+      tgtToBall: tgt ? Math.round(dist(tgt.x, tgt.y, b.x, b.y) / YARD * 10) / 10 : null,
+      tgtToLand: tgt ? Math.round(dist(tgt.x, tgt.y, b.tx, b.ty) / YARD * 10) / 10 : null,
+      msg: this.message,
     };
   }
 
@@ -819,10 +825,12 @@ export class Game {
         continue;
       }
 
-      // ball in the air: target drives to the spot; on a tip everyone attacks
-      // the loose ball; otherwise receivers keep running their routes
+      // ball in the air: the target runs to the LANDING spot and adjusts there
+      // (the ball's ground speed far exceeds his, so chasing the ball itself
+      // would send him backward toward the QB). On a tip everyone attacks the
+      // loose ball; others keep running their routes.
       if (ballLoose) {
-        if (this.ball.tip || p.id === this.ball.targetId) {
+        if (p.id === this.ball.targetId || (this.ball.tip)) {
           this.moveToward(p, this.ball.tx, this.ball.ty, dt, 1);
         } else if (p.route && p.routeIdx < p.route.length) {
           this.followRoute(p, dt);
@@ -866,8 +874,15 @@ export class Game {
       // run the route
       if (p.route && p.routeIdx < p.route.length) {
         this.followRoute(p, dt);
-      } else if (p.route) {
-        this.moveToward(p, p.x + dir * YARD, p.y, dt, 0.55);
+      } else if (p.route && p.route.length) {
+        // route finished — keep working in its final direction (don't stall, so
+        // a streak keeps running deep and the QB can throw him open)
+        const r = p.route;
+        const n = r.length;
+        let dx = n >= 2 ? r[n - 1].x - r[n - 2].x : dir * YARD;
+        let dy = n >= 2 ? r[n - 1].y - r[n - 2].y : 0;
+        const dm = Math.hypot(dx, dy) || 1;
+        this.moveToward(p, p.x + (dx / dm) * 5 * YARD, p.y + (dy / dm) * 5 * YARD, dt, 0.8);
       }
     }
   }
@@ -913,21 +928,32 @@ export class Game {
       p.dvx = 0;
       p.dvy = 0;
     }
-    // get the ball out before the pocket sheds (~1.3s) or under pressure
+    // let the routes develop (~1.1s) then throw to the most open man; bail
+    // earlier only under real pressure (gets the ball out instead of a sack)
     const rush = this.nearestOpp(p);
-    const pressured = rush && dist(p.x, p.y, rush.x, rush.y) < 2.4 * YARD;
-    if (this.throwTimer > 1.0 || pressured) {
+    const pressured = rush && dist(p.x, p.y, rush.x, rush.y) < 2.2 * YARD;
+    if (this.throwTimer > 1.1 || (pressured && this.throwTimer > 0.5)) {
       const tgt = this.bestReceiver();
       if (tgt) this.throwTo(tgt.id);
     }
   }
 
   private followRoute(p: Player, dt: number) {
-    const wp = p.route![p.routeIdx];
+    const route = p.route!;
+    const wp = route[p.routeIdx];
     this.moveToward(p, wp.x, wp.y, dt, 1);
-    if (dist(p.x, p.y, wp.x, wp.y) < 0.5 * YARD) {
+    const d = dist(p.x, p.y, wp.x, wp.y);
+    // momentum-robust advance: a fast receiver can't stop on a dime, so advance
+    // when reasonably close OR when he's already run PAST the waypoint (so he
+    // never gets stuck circling a break point).
+    let advance = d < 1.3 * YARD;
+    if (!advance && d < 3.5 * YARD) {
+      const vdot = p.vx * (wp.x - p.x) + p.vy * (wp.y - p.y);
+      if (vdot < 0) advance = true; // velocity points away => passed it
+    }
+    if (advance) {
       p.routeIdx++;
-      if (p.routeIdx < p.route!.length) this.routeBreak(p); // a break = a separation contest
+      if (p.routeIdx < route.length) this.routeBreak(p); // a break = a separation contest
     }
   }
 
@@ -963,7 +989,10 @@ export class Game {
     }
   }
 
-  /** at the snap, press corners jam their man — winner controls the release */
+  /** at the snap, a press corner tries to get a good jam — but he CANNOT impede
+   * the receiver (no contact rules until the ball is touched). The contest only
+   * decides positioning: win = the DB stays on top in phase; loss = the WR wins
+   * a clean release. The receiver is never stunned/held. */
   private pressJam() {
     if (this.defPlay.coverage !== "man" || (this.defPlay.press ?? 0) < 0.5) return;
     for (const wr of this.eligibleReceivers()) {
@@ -975,8 +1004,8 @@ export class Game {
         kind: "jam",
         firstContact: true,
       });
-      if (jam.win) wr.burst = 0.3; // clean release, slight burst off the line
-      else wr.stun = 0.22 + 0.3 * jam.sev; // jammed, knocked off rhythm
+      if (jam.win) wr.burst = 0.35; // WR wins the release
+      else db.burst = 0.3; // DB stays in phase off the line (positioning only)
     }
   }
 
@@ -1148,11 +1177,13 @@ export class Game {
       this.spyQuarterback(p, this.carrier(), dt);
       return;
     }
+    // TRAIL technique: mirror the receiver but play slightly BEHIND him (toward
+    // the LOS) rather than sitting downfield in the throwing lane — so the WR
+    // shields the ball and a led throw doesn't drop right onto the DB. The DB
+    // can still close and contest at the catch (jump-ball) and undercut inbreakers.
     const dir = this.offDir();
-    const press = this.defPlay.press ?? 0.6;
-    const cushion = lerp(2.2, 0.3, press); // yards on the goal side of the WR
     const aim = this.intercept(p, cover);
-    this.moveToward(p, aim.x + dir * cushion * YARD, aim.y, dt, 0.99);
+    this.moveToward(p, aim.x - dir * 0.6 * YARD, aim.y, dt, 0.99);
   }
 
   private coverZone(p: Player, dt: number) {
@@ -1444,16 +1475,23 @@ export class Game {
     if (!r) return;
     const b = this.ball;
 
-    // lead the receiver: predict where they'll be when the ball arrives
-    let landX = r.x;
-    let landY = r.y;
-    for (let i = 0; i < 3; i++) {
-      const ft = dist(qb.x, qb.y, landX, landY) / PASS_SPEED;
-      landX = r.x + r.vx * ft;
-      landY = r.y + r.vy * ft;
-    }
-    landX = clamp(landX, LEFT_GOAL - 40, RIGHT_GOAL + 40);
-    landY = clamp(landY, SIDELINE, WORLD_H - SIDELINE);
+    // Lead the receiver, but only a CATCHABLE amount: the receiver also runs to
+    // the ball, so over-leading by the full flight time just throws it past him
+    // (often out of bounds). Cap the lead time, add QB-accuracy scatter, and
+    // keep the spot inbounds with a sideline buffer.
+    const dir = this.offDir();
+    const distYd = dist(qb.x, qb.y, r.x, r.y) / YARD;
+    const ft = (distYd * YARD) / PASS_SPEED;
+    const lead = Math.min(ft, 0.4); // modest lead — the receiver also tracks the ball
+    const accKey = distYd < 20 ? "ACS" : distYd < 40 ? "ACM" : "ACD";
+    const acc = rate(qb.rat, accKey);
+    const onRun = Math.hypot(qb.vx, qb.vy) > 0.4 * qb.vmax ? 0.4 : 0; // throwing on the move
+    const scatter = (1 - acc / 99 + onRun) * 2.0 * YARD;
+    let landX = r.x + r.vx * lead + (rng() - 0.5) * 2 * scatter;
+    let landY = r.y + r.vy * lead + (rng() - 0.5) * 2 * scatter;
+    landX = clamp(landX, LEFT_GOAL - 20, RIGHT_GOAL + 20);
+    landY = clamp(landY, SIDELINE + 1.5 * YARD, WORLD_H - SIDELINE - 1.5 * YARD);
+    void dir;
 
     qb.hasBall = false;
     b.carrier = null;
@@ -1472,12 +1510,10 @@ export class Game {
     const throwDist = dist(qb.x, qb.y, landX, landY);
     b.ftime = Math.max(0.32, throwDist / PASS_SPEED);
     // every throw arcs enough to clear underneath defenders; long balls higher
-    b.peak = clamp(throwDist * 0.18, 1.7 * YARD, 3.4 * YARD);
-    // hand control of the target to the user so they can adjust to the ball
-    if (this.userOnOffense()) {
-      this.controlledId = receiverId;
-      this.setControlFlags();
-    }
+    b.peak = clamp(throwDist * 0.1, 1.0 * YARD, 2.4 * YARD); // flatter -> catchable longer near the landing
+    // the targeted receiver auto-runs to the ball and makes the catch; control
+    // hands to him only AFTER he catches it (completePass), so the pass plays
+    // out the same whether the QB is the human or the CPU.
     this.message = "";
     this.audio.throw();
   }
@@ -1515,31 +1551,92 @@ export class Game {
 
     // height follows a parabolic arc: rises off the QB's hand, drops to the catch
     b.z = lerp(Z_RELEASE, Z_CATCH, b.t) + b.peak * Math.sin(Math.PI * b.t);
-
-    // A defender can only play the ball when he's almost directly under it AND
-    // it's within his reach. The arc keeps it high over the middle, so only a
-    // rusher right at the release or a defender at the catch point can touch it.
     const offTeam = this.possession;
+    const target = b.targetId ? this.byId(b.targetId) : null;
+
+    // nearest eligible receiver and nearest defender to the ball (reach-gated)
+    let rec: Player | null = null;
+    let rd = Infinity;
+    let nd: Player | null = null;
+    let ndDist = Infinity;
     for (const p of this.players) {
-      if (p.team === offTeam) continue;
-      if (dist(p.x, p.y, b.x, b.y) > DEFLECT_R) continue;
-      const reach = p.blocked ? BLOCKED_REACH : REACH;
-      if (b.z > reach) continue;
-      const roll = rng();
-      if (roll < INT_CHANCE) return this.interception(p);
-      if (roll < INT_CHANCE + (1 - INT_CHANCE) * TIP_CHANCE)
-        return this.startTip(p);
-      return this.batDown();
-    }
-    // eligible receivers — a receiver in reach catches it
-    for (const p of this.players) {
-      if (p.team !== offTeam || !p.target) continue;
-      if (dist(p.x, p.y, b.x, b.y) > CATCH_R) continue;
-      if (b.z > REACH) continue;
-      return this.completePass(p);
+      if (b.z > REACH) break; // ball still too high for anyone to play
+      const d = dist(p.x, p.y, b.x, b.y);
+      if (p.team === offTeam) {
+        if (p.target && d < rd) {
+          rd = d;
+          rec = p;
+        }
+      } else if (d < ndDist) {
+        ndDist = d;
+        nd = p;
+      }
     }
 
-    if (b.t >= 1) this.incomplete(); // overthrown — hit the turf
+    // The catch is decided AT THE LANDING (where the receiver is waiting), so a
+    // defender can't snipe the descending ball a few yards up-path. In FLIGHT,
+    // only a defender directly under the ball AND clearly in front of the
+    // receiver can pick it off (a true jumped route).
+    const atLanding = b.t >= 0.96 || dist(b.x, b.y, b.tx, b.ty) < 1.0 * YARD;
+
+    if (!atLanding) {
+      if (
+        nd &&
+        ndDist <= DEFLECT_R &&
+        b.z <= REACH &&
+        (!rec || ndDist < rd - 0.8 * YARD)
+      ) {
+        return this.resolveDefenderBall(nd, target, ndDist); // jumped the route
+      }
+      return; // let it finish its flight to the landing
+    }
+
+    // at the landing
+    const recNear = rec && rd <= CATCH_R * 1.5;
+    const defNear = nd && ndDist <= CATCH_R * 1.5;
+    if (recNear) return this.resolveCatch(rec!, defNear ? nd : null, ndDist);
+    if (defNear) return this.resolveDefenderBall(nd!, target, ndDist);
+    this.incomplete(); // nobody there — overthrown
+  }
+
+  /** the intended receiver is at the ball: open => catch (rare drop); contested
+   * => a ratings contest (more separation favours the WR) for catch / PBU / INT */
+  private resolveCatch(rec: Player, nd: Player | null, ndDist: number) {
+    const sep = (nd ? ndDist : 99) / YARD;
+    if (!nd || sep > 1.6) {
+      const drop = clamp((88 - rate(rec.rat, "CTH")) / 350, 0.01, 0.12);
+      return rng() < drop ? this.incomplete() : this.completePass(rec);
+    }
+    const atk = (rate(rec.rat, "CTH") + rate(rec.rat, "CIT") + rate(rec.rat, "SPC")) / 3;
+    const dfn = (rate(nd.rat, "INT") + rate(nd.rat, "JMP") + rate(nd.rat, "MCV")) / 3;
+    const res = contest({
+      atk,
+      def: dfn,
+      kind: "catch",
+      firstContact: true,
+      // it's HIS ball — he's tracking it and boxing out (+14); separation helps more
+      leverage: 14 + (sep - 0.7) * 14,
+    });
+    if (res.win) return this.completePass(rec);
+    // a contested LOSS is almost always a pass break-up; a pick only when the
+    // defender decisively won the jump ball, a tipped ball now and then.
+    if (res.extreme) return this.interception(nd);
+    return rng() < 0.12 ? this.startTip(nd) : this.batDown();
+  }
+
+  /** a defender truly undercut the route (no receiver at the ball) */
+  private resolveDefenderBall(nd: Player, target: Player | null, ndDist: number) {
+    const dfn = (rate(nd.rat, "INT") + rate(nd.rat, "JMP") + rate(nd.rat, "MCV")) / 3;
+    const atk = target ? (rate(target.rat, "CTH") + rate(target.rat, "CIT")) / 2 : 64;
+    const res = contest({
+      atk: dfn,
+      def: atk,
+      kind: "catch",
+      firstContact: true,
+      leverage: clamp((2 - ndDist / YARD) * 8, 0, 16),
+    });
+    if (res.win && res.extreme) return this.interception(nd); // cleanly picked
+    return this.incomplete(); // off-target throw knocked away — no play
   }
 
   /** a deflected ball is live: the closest player under it (either team) grabs it */
