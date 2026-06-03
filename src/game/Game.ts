@@ -789,15 +789,16 @@ export class Game {
       // distance to the posts (back of end zone = +10 from goal line); a PAT is
       // a fixed short kick, always inside range.
       const yds = kind === "pat" ? 20 : Math.abs(goalX - b.sx) / YARD + 10;
-      this.kickGood = yds <= 52 && rng() < this.fgProb(yds);
+      this.kickGood = yds <= 65 && rng() < this.fgProb(yds);
       b.tx = goalX + dir * (this.kickGood ? 14 * YARD : 2 * YARD);
       b.ty = WORLD_H / 2 + (this.kickGood ? 0 : (rng() - 0.5) * 8 * YARD);
       b.peak = 3.2 * YARD;
       b.ftime = Math.max(0.7, (Math.abs(b.tx - b.sx) / KICK_SPEED) * 1.1);
       this.message = kind === "pat" ? "EXTRA POINT…" : "FIELD GOAL…";
     } else {
-      // punt: 38-46 yards of hang, with a touchback if it reaches the end zone
-      const puntYds = 38 + rng() * 8;
+      // punt: gross scales with the punter's leg (league-avg ~75 -> 38-46yd), with
+      // a touchback if it reaches the end zone. A better leg = more gross.
+      const puntYds = 38 + (this.kickerRating() - 75) * 0.22 + rng() * 8;
       let landX = b.sx + dir * puntYds * YARD;
       if (dir > 0 ? landX >= goalX : landX <= goalX) landX = goalX; // touchback
       b.tx = landX;
@@ -808,12 +809,25 @@ export class Game {
     }
   }
 
-  private fgProb(yds: number) {
-    if (yds <= 25) return 0.97;
-    if (yds <= 35) return 0.88;
-    if (yds <= 43) return 0.72;
-    if (yds <= 48) return 0.55;
-    return 0.38;
+  /** the kicking team's kicker rating (KIC); league-average ~75 when unrated. */
+  private kickerRating() {
+    const k = this.byId(`${this.possession}_K`) ?? this.byId(`${this.possession}_QB`);
+    const v = k ? rate(k.rat, "KIC") : 75;
+    return v === 70 ? 75 : v; // unrated (default 70) -> treat as league-average 75
+  }
+
+  /** FG make probability vs distance, NFL-anchored flat-then-cliff curve. A kicker
+   *  scalar shifts EFFECTIVE distance (a better kicker plays each kick as if it
+   *  were several yards shorter) — barely moves short kicks, swings 50+ a lot.
+   *  Anchors (75-rated): 25→.97, 35→.94, 45→.78, 53→.70, 60→.33 (design/realism-targets.md). */
+  private fgProb(yds: number, kic = this.kickerRating()) {
+    const d = yds - (kic - 75) * 0.4; // effective distance
+    if (d <= 25) return 0.97;
+    if (d <= 35) return lerp(0.97, 0.92, (d - 25) / 10);
+    if (d <= 45) return lerp(0.92, 0.78, (d - 35) / 10); // the knee
+    if (d <= 53) return lerp(0.78, 0.7, (d - 45) / 8); // shelf
+    if (d <= 62) return lerp(0.7, 0.25, (d - 53) / 9); // collapse
+    return 0.12;
   }
 
   private updateKick(dt: number) {

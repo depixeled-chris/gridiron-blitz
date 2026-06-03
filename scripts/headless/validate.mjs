@@ -85,7 +85,38 @@ function pass() {
   passCell("slants(short) v PREVENT", { off: 75, def: 75, defForm: "fourthree", defPlay: "prevent", form: "shotgun", pid: "slants" }, 36, "1");
 }
 
-const all = { rush, rushtier, pass };
+function kickCell(label, kic, N = 120) {
+  // FG distance = 117 - ownYd; tier set via testTiers(off=kicker rating)
+  const dists = [[25, 92], [35, 82], [45, 72], [52, 65], [57, 60]];
+  const out = [];
+  for (const [d, ownYd] of dists) {
+    let good = 0;
+    for (let i = 0; i < N; i++) {
+      g.testTiers(kic, 75);
+      g.testDefense(null, null);
+      g.testNewSeries(ownYd);
+      const before = g.testState();
+      reseed();
+      g.testChoose("special", "fieldgoal");
+      g.testSnap();
+      let s = before;
+      for (let k = 0; k < 200; k++) { g.testStep(DT); s = g.testState(); if (s.phase !== "live" && k > 2) break; }
+      if (s.score.home - before.score.home === 3) good++;
+    }
+    out.push(`${d}yd ${String(Math.round(good / N * 100)).padStart(3)}%`);
+  }
+  console.log(`  ${label.padEnd(18)} ${out.join("  ")}`);
+}
+
+function kick() {
+  console.log("\n=== FIELD GOALS by distance × kicker tier ===");
+  console.log("  NFL (avg): 20-29 ~97, 30-39 ~94, 40-49 ~77, 50-59 ~70; tier swings 50+ most");
+  kickCell("bad K (60)", 60);
+  kickCell("avg K (75)", 75);
+  kickCell("elite K (90)", 90);
+}
+
+const all = { rush, rushtier, pass, kick };
 const t0 = Date.now();
 console.log(`HEADLESS VALIDATE — ${new Date().toISOString()}`);
 if (SECTION === "all") for (const k of Object.keys(all)) all[k]();
