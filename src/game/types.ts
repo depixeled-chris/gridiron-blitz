@@ -135,8 +135,10 @@ export interface Player {
   blocked: boolean;
   /** seconds this defender has been continuously engaged by a block */
   engaged: number;
-  /** true once a defender has BEATEN his block this play (won the matchup) */
+  /** true once a defender has BEATEN his current blocker */
   shed: boolean;
+  /** id of the blocker he beat — a DIFFERENT blocker picking him up starts fresh */
+  shedBy?: string;
   /** brief speed-burst timer (s) after winning a route break / jam */
   burst: number;
   /** separation in yards to the nearest opponent (receivers; for the catch model) */

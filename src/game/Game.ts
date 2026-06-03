@@ -265,6 +265,7 @@ export class Game {
       play: this.offPlay.id,
       kind: this.offPlay.kind,
       throwTimer: Math.round(this.throwTimer * 100) / 100,
+      liveTime: Math.round(this.liveTime * 100) / 100,
       carrier: this.ball.carrier,
       inAir: this.ball.inAir,
     };
@@ -548,6 +549,7 @@ export class Game {
     // fresh matchup state for the new play
     for (const p of this.players) {
       p.shed = false;
+      p.shedBy = undefined;
       p.stun = 0;
       p.engaged = 0;
       p.burst = 0;
@@ -757,10 +759,17 @@ export class Game {
   }
 
   /** resolve one blocker-vs-defender engagement through the shared kernel:
-   * organic win/loss/stalemate plus pancake (defender knocked down) and blow-by. */
-  private resolveBlock(blocker: Player, def: Player, pass: boolean, dbl: boolean, dt: number) {
+   * organic win/loss/stalemate plus pancake (defender knocked down) and blow-by.
+   * `lev` is a positioning bias in rating pts: negative = the blocker has good
+   * leverage (square, between man and the QB) so technique offsets raw rating. */
+  private resolveBlock(blocker: Player, def: Player, pass: boolean, dbl: boolean, dt: number, lev = 0) {
+    // a DIFFERENT blocker arriving on a free rusher gets a fresh rep (help/slide)
+    if (def.shed && def.shedBy !== blocker.id) {
+      def.shed = false;
+      def.engaged = 0;
+    }
     def.blocked = true;
-    if (def.shed || def.stun > 0) return;
+    if (def.shed || def.stun > 0) return; // still beaten by this same blocker
     const { atk, dfn } = this.blockMatchup(blocker, def, pass);
     const res = contest({
       atk,
@@ -768,14 +777,21 @@ export class Game {
       kind: pass ? "block" : "shed",
       perFrame: dt,
       firstContact: def.engaged < 0.05,
-      momentum: dbl ? -16 : 0, // double team: much harder for the defender to win
+      momentum: (dbl ? -16 : 0) + lev, // double team / positioning leverage
     });
     if (res.extreme) {
-      if (res.delta > 0) def.shed = true; // defender super-win -> clean beat / blow-by
-      else def.stun = 0.55 + 0.65 * res.sev; // PANCAKE: blocker buries him
+      if (res.delta > 0) {
+        def.shed = true; // defender super-win -> clean beat / blow-by
+        def.shedBy = blocker.id;
+      } else {
+        def.stun = 0.55 + 0.65 * res.sev; // PANCAKE: blocker buries him
+      }
       return;
     }
-    if (res.win) def.shed = true; // beat his block this rep
+    if (res.win) {
+      def.shed = true; // beat his block this rep
+      def.shedBy = blocker.id;
+    }
   }
 
   private clampPositions() {
@@ -1244,51 +1260,78 @@ export class Game {
     }
   }
 
-  /** assign each blocker to a rusher inside-out; spares double the top threat */
+  /** threat-based pass protection: every blocker always picks up the most
+   * dangerous free rusher. A rusher who BEAT his block (shed) becomes the top
+   * priority so a free lineman peels off to him instead of standing around. */
   private passProtect(blockers: Player[], carrier: Player | null, dt: number) {
     const protect = carrier ?? { x: this.los, y: WORLD_H / 2 };
-    const rush = this.players
-      .filter((p) => this.rushers.has(p.id))
-      .sort((a, b) => dist(a.x, a.y, protect.x, protect.y) - dist(b.x, b.y, protect.x, protect.y));
-    const avail = blockers.slice();
+    const rush = this.players.filter((p) => this.rushers.has(p.id));
+    if (!rush.length) {
+      for (const ol of blockers) {
+        ol.dvx = 0;
+        ol.dvy = 0;
+      }
+      return;
+    }
+    // danger: closer to the QB = more urgent; a rusher who's BEATEN his man (shed,
+    // not currently held by anyone) jumps the queue so a blocker redirects to him.
+    const danger = (r: Player) =>
+      dist(r.x, r.y, protect.x, protect.y) - (r.shed ? 500 : 0);
+    const threats = rush.slice().sort((a, b) => danger(a) - danger(b));
+    const free = blockers.slice();
     const assigns: [Player, Player][] = [];
-    for (const r of rush) {
-      if (!avail.length) break; // outnumbered — this rusher comes free
+    // one blocker to each threat, most dangerous first, by nearest free blocker.
+    // The blocker who just got beaten by this rusher is deprioritized so a
+    // neighbour slides over to pick up the free man instead of him re-chasing.
+    for (const t of threats) {
+      if (!free.length) break;
       let bi = 0;
       let bd = Infinity;
-      for (let i = 0; i < avail.length; i++) {
-        const d = dist(avail[i].x, avail[i].y, r.x, r.y);
+      for (let i = 0; i < free.length; i++) {
+        let d = dist(free[i].x, free[i].y, t.x, t.y);
+        if (t.shed && free[i].id === t.shedBy) d += 400; // he already lost this rep
         if (d < bd) {
           bd = d;
           bi = i;
         }
       }
-      assigns.push([avail.splice(bi, 1)[0], r]);
+      assigns.push([free.splice(bi, 1)[0], t]);
     }
-    for (const ol of avail) {
-      if (rush.length) assigns.push([ol, rush[0]]);
-      else {
-        ol.dvx = 0;
-        ol.dvy = 0;
-      }
-    }
+    // any leftover blockers double the most dangerous threat (never idle)
+    for (const ol of free) assigns.push([ol, threats[0]]);
+
     const cnt: Record<string, number> = {};
     for (const [, r] of assigns) cnt[r.id] = (cnt[r.id] ?? 0) + 1;
     for (const [ol, r] of assigns) this.engageBlock(ol, r, protect, cnt[r.id] >= 2, dt);
   }
 
-  /** a blocker mirrors a rusher; the kernel decides win/loss/pancake/blow-by */
+  /** a tackle/guard sets and mirrors a rusher. He KICK-SLIDES to cut off the
+   * rusher's path to the QB (leading the rusher, gaining depth) rather than
+   * chasing his current spot — so edge speed rushers get ridden up the arc
+   * instead of running free around the corner. */
   private engageBlock(ol: Player, r: Player, protect: { x: number; y: number }, dbl: boolean, dt: number) {
     const dx = protect.x - r.x;
     const dy = protect.y - r.y;
     const d = Math.hypot(dx, dy) || 1;
-    this.moveTowardRaw(ol, r.x + (dx / d) * BLOCK_R * 0.7, r.y + (dy / d) * BLOCK_R * 0.7, 1);
-    if (dist(ol.x, ol.y, r.x, r.y) < BLOCK_R * 1.6) {
-      this.resolveBlock(ol, r, true, dbl, dt);
+    const qx = dx / d;
+    const qy = dy / d;
+    // set point: anticipate the rusher, then sit ~1.1yd toward the QB of him so
+    // the OL cuts the arc instead of trailing.
+    const rx = r.x + r.vx * 0.11;
+    const ry = r.y + r.vy * 0.11;
+    this.moveTowardRaw(ol, rx + qx * 1.1 * YARD, ry + qy * 1.1 * YARD, 1.12); // pass-set is quicker than a chase
+    if (dist(ol.x, ol.y, r.x, r.y) < BLOCK_R * 2.0) {
+      // leverage: how squarely is the OL between the rusher and the QB?
+      const ox = ol.x - r.x;
+      const oy = ol.y - r.y;
+      const om = Math.hypot(ox, oy) || 1;
+      const align = (ox / om) * qx + (oy / om) * qy; // 1 = directly QB-side of him
+      const lev = -(align - 0.15) * 22; // square set -> negative (helps the OL hold)
+      this.resolveBlock(ol, r, true, dbl, dt, lev);
       if (this.neutralized(r)) {
-        // block holding: wall the rusher off / drive him back from the QB
-        r.x -= (dx / d) * 0.5;
-        r.y -= (dy / d) * 0.5;
+        // ride him: wall off and push him away from the QB (up/around the arc)
+        r.x -= qx * 0.55;
+        r.y -= qy * 0.55;
       }
     }
   }
