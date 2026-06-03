@@ -96,9 +96,19 @@ export interface Player {
   number: number;
   x: number;
   y: number;
+  /** actual velocity (px/s) — integrated toward the desired velocity */
   vx: number;
   vy: number;
-  /** top speed in yards/sec */
+  /** desired velocity this tick (px/s); AI/input set this, the integrator chases it */
+  dvx: number;
+  dvy: number;
+  /** kinematics derived from ratings (px units) */
+  vmax: number;
+  vacc: number;
+  vturn: number;
+  /** sparse ratings (0..99); missing defaults to 70 */
+  rat?: Record<string, number | boolean>;
+  /** top speed in yards/sec (legacy fallback) */
   speed: number;
   hasBall: boolean;
   controlled: boolean;

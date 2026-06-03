@@ -31,6 +31,7 @@ import {
 import { Input } from "./input";
 import { Sfx } from "./audio";
 import { DEFENSE_FORMATIONS, OFFENSE_BASE, OFFENSE_FORMATIONS } from "./plays";
+import { ROSTERS, rate } from "./ratings";
 import type {
   BallState,
   DefenseFormation,
@@ -43,7 +44,7 @@ import type {
   Role,
   Team,
 } from "./types";
-import { clamp, dist, lerp, rng, steer } from "./utils";
+import { clamp, dist, lerp, rng } from "./utils";
 
 interface FormSpot {
   slot: string;
@@ -247,6 +248,9 @@ export class Game {
       role: p.role,
       x: p.x,
       y: p.y,
+      spd: Math.round(Math.hypot(p.vx, p.vy)),
+      vmax: Math.round(p.vmax),
+      stun: Math.round(p.stun * 100) / 100,
     }));
   }
   debugPhase() {
@@ -367,6 +371,7 @@ export class Game {
       p.x = p.ox;
       p.y = p.oy;
       p.target = f.target;
+      this.attachRatings(p, offTeam, f.slot);
       this.players.push(p);
     }
     // defense: the selected front's personnel + alignment
@@ -381,6 +386,7 @@ export class Game {
       p.oy = clamp(midY + f.lat * YARD, SIDELINE, WORLD_H - SIDELINE);
       p.x = p.ox;
       p.y = p.oy;
+      this.attachRatings(p, defTeam, f.slot);
       this.players.push(p);
     }
 
@@ -834,8 +840,8 @@ export class Game {
     if (dir > 0 ? p.x > dropX : p.x < dropX) {
       this.moveToward(p, dropX, p.y, dt, 0.85);
     } else {
-      p.vx = 0;
-      p.vy = 0;
+      p.dvx = 0;
+      p.dvy = 0;
     }
     // get the ball out before the pocket sheds (~1.3s) or under pressure
     const rush = this.nearestOpp(p);
@@ -1146,8 +1152,8 @@ export class Game {
     for (const ol of avail) {
       if (rush.length) this.engageBlock(ol, rush[0], protect);
       else {
-        ol.vx = 0;
-        ol.vy = 0;
+        ol.dvx = 0;
+        ol.dvy = 0;
       }
     }
   }
@@ -1447,8 +1453,71 @@ export class Game {
   }
 
   // ---- integration + collisions -----------------------------------------
+  /** attach pre-baked ratings + derive kinematics (px units) from SPD/ACC/AGI */
+  private attachRatings(p: Player, team: Team, slot: string) {
+    const r = ROSTERS[team][rosterKey(slot, p.defRole)];
+    p.rat = r;
+    const SPD = rate(r, "SPD");
+    const ACC = rate(r, "ACC");
+    const AGI = rate(r, "AGI");
+    p.vmax = (8.0 + (SPD - 70) * 0.075) * YARD; // ~6.5..10.2 yd/s
+    p.vacc = 116 + (ACC - 70) * 4; // px/s^2: 0->top in ~1.6-1.8s
+    p.vturn = 650 + (AGI - 70) * 8; // px/s^2: full-speed turn radius ~2.4-4yd
+  }
+
+  /** steering integrator: chase desired velocity with finite accel + turn rate,
+   * so bodies carry momentum and arc through cuts instead of teleport-pivoting */
   private integrate(dt: number) {
     for (const p of this.players) {
+      if (p.stun > 0) {
+        // knocked down / off balance: bleed speed, no steering
+        p.vx *= 0.82;
+        p.vy *= 0.82;
+      } else {
+        const sp = Math.hypot(p.vx, p.vy);
+        let hx: number;
+        let hy: number;
+        if (sp > 1) {
+          hx = p.vx / sp;
+          hy = p.vy / sp;
+        } else {
+          const dm = Math.hypot(p.dvx, p.dvy) || 1;
+          hx = p.dvx / dm;
+          hy = p.dvy / dm;
+        }
+        const dvx = p.dvx - p.vx;
+        const dvy = p.dvy - p.vy;
+        // split desired change into along-heading (accel/brake) and perpendicular (turn)
+        const along = dvx * hx + dvy * hy;
+        let ax = along * hx;
+        let ay = along * hy;
+        let px = dvx - ax;
+        let py = dvy - ay;
+        const accelCap = (along >= 0 ? p.vacc : p.vacc * 1.7) * dt; // brake faster
+        const turnCap = p.vturn * dt;
+        const al = Math.abs(along);
+        if (al > accelCap) {
+          const k = accelCap / al;
+          ax *= k;
+          ay *= k;
+        }
+        const pl = Math.hypot(px, py);
+        if (pl > turnCap) {
+          const k = turnCap / pl;
+          px *= k;
+          py *= k;
+        }
+        p.vx += ax + px;
+        p.vy += ay + py;
+        // never exceed what's being asked for (desired magnitude = turbo/speedMul aware)
+        const cap = Math.max(8, Math.hypot(p.dvx, p.dvy));
+        const vs = Math.hypot(p.vx, p.vy);
+        if (vs > cap) {
+          const k = cap / vs;
+          p.vx *= k;
+          p.vy *= k;
+        }
+      }
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.x = clamp(p.x, 6, WORLD_W - 6);
@@ -1501,15 +1570,20 @@ export class Game {
 
   // ---- movement helpers --------------------------------------------------
   private pps(p: Player) {
-    return SPEED[p.role] * YARD;
+    return p.vmax; // top speed in px/s (rating-derived)
   }
 
   private applyUserMove(p: Player, _dt: number) {
     const a = this.input.axis();
-    const sp = this.pps(p) * (this.input.turbo() ? TURBO : 1);
-    const m = Math.hypot(a.x, a.y) || 1;
-    p.vx = (a.x / m) * sp * Math.min(1, Math.hypot(a.x, a.y));
-    p.vy = (a.y / m) * sp * Math.min(1, Math.hypot(a.x, a.y));
+    const mag = Math.hypot(a.x, a.y);
+    const sp = p.vmax * (this.input.turbo() ? TURBO : 1);
+    if (mag > 0.01) {
+      p.dvx = (a.x / mag) * sp * Math.min(1, mag);
+      p.dvy = (a.y / mag) * sp * Math.min(1, mag);
+    } else {
+      p.dvx = 0;
+      p.dvy = 0;
+    }
 
     // user throws while at QB on a pass play
     if (
@@ -1540,10 +1614,15 @@ export class Game {
     _dt: number,
     speedMul: number
   ) {
-    const sp = this.pps(p) * speedMul;
-    const s = steer(p.x, p.y, tx, ty, sp);
-    p.vx = s.vx;
-    p.vy = s.vy;
+    // set DESIRED velocity toward the target; the integrator handles momentum.
+    const dx = tx - p.x;
+    const dy = ty - p.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const sp = p.vmax * clamp(speedMul, 0, 1.4);
+    // ease off near the target so bodies settle instead of jittering
+    const ease = d < 0.6 * YARD ? d / (0.6 * YARD) : 1;
+    p.dvx = (dx / d) * sp * ease;
+    p.dvy = (dy / d) * sp * ease;
   }
 
   private moveTowardRaw(p: Player, tx: number, ty: number, speedMul: number) {
@@ -1930,6 +2009,11 @@ function basePlayer(id: string, team: Team, f: FormSpot): Player {
     y: 0,
     vx: 0,
     vy: 0,
+    dvx: 0,
+    dvy: 0,
+    vmax: SPEED[f.role] * YARD,
+    vacc: 116,
+    vturn: 650,
     speed: SPEED[f.role],
     hasBall: false,
     controlled: false,
@@ -1940,6 +2024,20 @@ function basePlayer(id: string, team: Team, f: FormSpot): Player {
     blocked: false,
     engaged: 0,
   };
+}
+
+// map a game slot to a pre-baked roster entry (POC; groups share ratings)
+function rosterKey(slot: string, defRole?: string): string {
+  const OFF: Record<string, string> = {
+    QB: "QB7", R: "RB28", A: "WR80", B: "WR88", C: "TE84",
+    LT: "LT73", LG: "LG66", CEN: "CEN55", RG: "RG67", RT: "RT76", F: "FB44",
+  };
+  if (OFF[slot]) return OFF[slot];
+  if (defRole === "DL") return /E/.test(slot) ? "EDGE91" : "DT93"; // ends vs interior
+  if (defRole === "LB") return /M/.test(slot) ? "MLB52" : "OLB56";
+  if (defRole === "CB") return /2|N|4/.test(slot) ? "CB22" : "CB24";
+  if (defRole === "S") return /F/.test(slot) ? "FS31" : "SS33";
+  return "QB7";
 }
 
 function freshBall(): BallState {
