@@ -137,6 +137,10 @@ export interface Player {
   engaged: number;
   /** true once a defender has BEATEN his block this play (won the matchup) */
   shed: boolean;
+  /** brief speed-burst timer (s) after winning a route break / jam */
+  burst: number;
+  /** separation in yards to the nearest opponent (receivers; for the catch model) */
+  sep: number;
 }
 
 export interface BallState {

@@ -251,6 +251,9 @@ export class Game {
       spd: Math.round(Math.hypot(p.vx, p.vy)),
       vmax: Math.round(p.vmax),
       stun: Math.round(p.stun * 100) / 100,
+      sep: Math.round(p.sep * 10) / 10,
+      burst: Math.round(p.burst * 100) / 100,
+      target: p.target,
     }));
   }
   debugPhase() {
@@ -547,7 +550,9 @@ export class Game {
       p.shed = false;
       p.stun = 0;
       p.engaged = 0;
+      p.burst = 0;
     }
+    this.pressJam();
     const offTeam = this.possession;
     const ball = this.ball;
 
@@ -702,13 +707,15 @@ export class Game {
     this.liveTime += dt;
     if (this.switchCooldown > 0) this.switchCooldown -= dt;
 
-    // age engagement from last frame's blocks, clear for this frame, run stuns down
+    // age engagement from last frame's blocks, clear for this frame, run timers down
     for (const p of this.players) {
       if (p.blocked) p.engaged += dt;
       else p.engaged = Math.max(0, p.engaged - 2 * dt);
       p.blocked = false;
       if (p.stun > 0) p.stun = Math.max(0, p.stun - dt);
+      if (p.burst > 0) p.burst = Math.max(0, p.burst - dt);
     }
+    this.updateSeparation();
 
     this.updateBlocking(dt);
     this.updateOffense(dt);
@@ -900,10 +907,73 @@ export class Game {
 
   private followRoute(p: Player, dt: number) {
     const wp = p.route![p.routeIdx];
-    const sp = this.pps(p) / YARD;
     this.moveToward(p, wp.x, wp.y, dt, 1);
-    if (dist(p.x, p.y, wp.x, wp.y) < 0.5 * YARD) p.routeIdx++;
-    void sp;
+    if (dist(p.x, p.y, wp.x, wp.y) < 0.5 * YARD) {
+      p.routeIdx++;
+      if (p.routeIdx < p.route!.length) this.routeBreak(p); // a break = a separation contest
+    }
+  }
+
+  /** the defender responsible for this receiver: his man, else the nearest */
+  private coveringDefender(wr: Player): Player | null {
+    let man: Player | null = null;
+    let near: Player | null = null;
+    let nd = Infinity;
+    for (const d of this.players) {
+      if (d.team === wr.team) continue;
+      if (d.assignId === wr.id) man = d;
+      const dd = dist(d.x, d.y, wr.x, wr.y);
+      if (dd < nd) {
+        nd = dd;
+        near = d;
+      }
+    }
+    return man ?? near;
+  }
+
+  /** WR vs his man at a route break — the kernel decides who wins the separation */
+  private routeBreak(wr: Player) {
+    const db = this.coveringDefender(wr);
+    if (!db || dist(db.x, db.y, wr.x, wr.y) > 4 * YARD) return; // uncovered: no contest
+    const atk = (rate(wr.rat, "RRM") + rate(wr.rat, "RRS") + rate(wr.rat, "AGI")) / 3;
+    const dfn = (rate(db.rat, "MCV") + rate(db.rat, "AGI")) / 2;
+    const res = contest({ atk, def: dfn, kind: "cut", firstContact: true });
+    if (res.win) {
+      wr.burst = 0.45 + 0.4 * res.sev; // gets a step on the break
+      if (res.extreme) db.stun = 0.3 + 0.45 * res.sev; // double-move: DB falls
+    } else {
+      db.burst = 0.35; // DB jumps the break and stays in phase
+    }
+  }
+
+  /** at the snap, press corners jam their man — winner controls the release */
+  private pressJam() {
+    if (this.defPlay.coverage !== "man" || (this.defPlay.press ?? 0) < 0.5) return;
+    for (const wr of this.eligibleReceivers()) {
+      const db = this.players.find((d) => d.assignId === wr.id);
+      if (!db || dist(db.x, db.y, wr.x, wr.y) > 2.5 * YARD) continue;
+      const jam = contest({
+        atk: rate(wr.rat, "RLS"),
+        def: rate(db.rat, "PRS"),
+        kind: "jam",
+        firstContact: true,
+      });
+      if (jam.win) wr.burst = 0.3; // clean release, slight burst off the line
+      else wr.stun = 0.22 + 0.3 * jam.sev; // jammed, knocked off rhythm
+    }
+  }
+
+  /** per-receiver separation (yards to nearest defender) for the catch model */
+  private updateSeparation() {
+    for (const wr of this.players) {
+      if (!wr.target) continue;
+      let nd = Infinity;
+      for (const d of this.players) {
+        if (d.team === wr.team) continue;
+        nd = Math.min(nd, dist(d.x, d.y, wr.x, wr.y));
+      }
+      wr.sep = nd === Infinity ? 99 : nd / YARD;
+    }
   }
 
   private runToGoal(p: Player, dt: number) {
@@ -1672,7 +1742,7 @@ export class Game {
     const dx = tx - p.x;
     const dy = ty - p.y;
     const d = Math.hypot(dx, dy) || 1;
-    const sp = p.vmax * clamp(speedMul, 0, 1.4);
+    const sp = p.vmax * clamp(speedMul, 0, 1.4) * (p.burst > 0 ? 1.18 : 1);
     // ease off near the target so bodies settle instead of jittering
     const ease = d < 0.6 * YARD ? d / (0.6 * YARD) : 1;
     p.dvx = (dx / d) * sp * ease;
@@ -2078,6 +2148,8 @@ function basePlayer(id: string, team: Team, f: FormSpot): Player {
     blocked: false,
     engaged: 0,
     shed: false,
+    burst: 0,
+    sep: 0,
   };
 }
 
