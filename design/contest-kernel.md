@@ -2,6 +2,18 @@
 
 > Synthesized design — Gridiron Blitz. Reconciled from all system specs in `systems/`.
 
+> **IMPLEMENTED & VALIDATED.** Code: `src/game/contest.ts`. Headless validation:
+> `npm run sim:kernel` (`scripts/kernel-sweep.ts`) — all acceptance bands pass.
+> Tuning reconciled from the draft pseudocode below to hit the build-plan bands
+> (sim-leaning, per `decisions.md`):
+> - `EXTREME_SLOPE 0.013 → 0.01` (so +48 mismatch ≈ 40% extreme, in the 35–45% band)
+> - `HZ_BASE.block 0.32 → 0.26`, `shed 0.50 → 0.45` (even pocket median **2.68s**)
+> - severity gets a fat X-factor tail: ~6.5% of even-matchup reps spike `sev` past 0.4
+>   (the "exciting tail on a wash"), the rest cluster `<0.2`.
+>
+> Validated distributions: win@Δ0 49.9% / Δ16 73.1% / Δ48 95.3%; extreme@Δ0 0% / Δ48 39.9%;
+> EDGE+22 mismatch → 80% pressure <2.0s + 13.6% instant super-wins. Deterministic via one seeded stream.
+
 ## The ONE Contest Kernel — `contest()`
 
 Every physical interaction (block, shed, rush win, jam, mirror-cut, break-tackle, catch, coverage, throw) calls **one** function. No bespoke per-system math. It lives in `utils.ts` next to `rng()` so it shares the deterministic xorshift stream.
