@@ -8,6 +8,7 @@ import {
   ENDZONE,
   FIELD_YARDS,
   INT_CHANCE,
+  KICK_SPEED,
   LEFT_GOAL,
   PASS_SPEED,
   PLAY_CLOCK,
@@ -606,7 +607,7 @@ export class Game {
       b.tx = goalX + dir * (this.kickGood ? 14 * YARD : 2 * YARD);
       b.ty = WORLD_H / 2 + (this.kickGood ? 0 : (rng() - 0.5) * 8 * YARD);
       b.peak = 3.2 * YARD;
-      b.ftime = Math.max(0.7, (Math.abs(b.tx - b.sx) / PASS_SPEED) * 1.1);
+      b.ftime = Math.max(0.7, (Math.abs(b.tx - b.sx) / KICK_SPEED) * 1.1);
       this.message = "FIELD GOAL…";
     } else {
       // punt: 38-46 yards of hang, with a touchback if it reaches the end zone
@@ -616,7 +617,7 @@ export class Game {
       b.tx = landX;
       b.ty = WORLD_H / 2 + (rng() - 0.5) * 6 * YARD;
       b.peak = 3.6 * YARD;
-      b.ftime = Math.max(0.9, (Math.abs(b.tx - b.sx) / PASS_SPEED) * 1.3);
+      b.ftime = Math.max(0.9, (Math.abs(b.tx - b.sx) / KICK_SPEED) * 1.3);
       this.message = "PUNT…";
     }
   }
