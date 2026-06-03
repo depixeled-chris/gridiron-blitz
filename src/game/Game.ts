@@ -1,14 +1,19 @@
 import { Application, Container, Graphics, Text } from "pixi.js";
 import {
   BLOCK_R,
+  CATCH_AREA,
   CATCH_R,
   COLORS,
   DEFLECT_R,
   ENDZONE,
   FIELD_YARDS,
   KICK_SPEED,
+  LAND_ZONE,
+  LEAD_MARGIN,
   LEFT_GOAL,
   PASS_SPEED,
+  RELEASE_ZONE,
+  SWAT_R,
   PLAY_CLOCK,
   QUARTER_SECONDS,
   REACH,
@@ -29,7 +34,7 @@ import { Input } from "./input";
 import { Sfx } from "./audio";
 import { DEFENSE_FORMATIONS, OFFENSE_BASE, OFFENSE_FORMATIONS } from "./plays";
 import { ROSTERS, rate } from "./ratings";
-import { contest } from "./contest";
+import { contest, reseed } from "./contest";
 import type {
   BallState,
   DefenseFormation,
@@ -112,8 +117,25 @@ export class Game {
   private defFormation: DefenseFormation = DEFENSE_FORMATIONS[0];
   private offPlay: OffensePlay = OFFENSE_FORMATIONS[0].plays[0];
   private defPlay: DefensePlay = DEFENSE_FORMATIONS[0].plays[0];
-  private kickMode: "fg" | "punt" | null = null;
+  private kickMode: "fg" | "punt" | "pat" | null = null;
   private kickGood = false;
+  // point-after state: a try is pending after a TD; conversion is the active attempt
+  private tryPending = false;
+  private tryMode = false;
+  private conversion: "pat" | "two" | null = null;
+  // test-only: AI-drive the ball carrier on a run (a real game has the human do it)
+  private testAutoRun = false;
+  // test-only: flat rating override per side (home=offense, away=defense) for
+  // neutral/tiered distribution validation. null = use the real rosters.
+  private testFlatOff: number | null = null;
+  private testFlatDef: number | null = null;
+  private headless = false;
+  // test-only: force a specific defensive matchup instead of a random call
+  private testDefFormation: string | null = null;
+  private testDefPlay: string | null = null;
+  // test-only: tackle-contest counters (broken-tackle rate validation)
+  private tkAttempts = 0;
+  private tkBreaks = 0;
   private camX = 0;
   private host: HTMLElement | null = null;
   private viewW = VIEW_W;
@@ -212,20 +234,40 @@ export class Game {
         OFFENSE_FORMATIONS[0];
       this.offFormation = f;
       this.offPlay = f.plays.find((p) => p.id === playId) ?? f.plays[0];
-      // AI defense answers with a random front + call
-      this.defFormation = pick(DEFENSE_FORMATIONS);
-      this.defPlay = pick(this.defFormation.plays);
+      // defense: a forced matchup (tests) or a random front + call
+      if (this.testDefFormation) {
+        this.defFormation =
+          DEFENSE_FORMATIONS.find((x) => x.id === this.testDefFormation) ??
+          DEFENSE_FORMATIONS[0];
+        this.defPlay =
+          this.defFormation.plays.find((p) => p.id === this.testDefPlay) ??
+          this.defFormation.plays[0];
+      } else {
+        this.defFormation = pick(DEFENSE_FORMATIONS);
+        this.defPlay = pick(this.defFormation.plays);
+      }
     } else {
       const f =
         DEFENSE_FORMATIONS.find((x) => x.id === formationId) ??
         DEFENSE_FORMATIONS[0];
       this.defFormation = f;
       this.defPlay = f.plays.find((p) => p.id === playId) ?? f.plays[0];
-      // AI offense never punts/kicks — exclude special teams
-      this.offFormation = pick(
-        OFFENSE_FORMATIONS.filter((x) => x.id !== "special")
-      );
-      this.offPlay = pick(this.offFormation.plays);
+      if (this.tryMode) {
+        // CPU always kicks the extra point on its point-after try
+        this.offFormation =
+          OFFENSE_FORMATIONS.find((x) => x.id === "convert")!;
+        this.offPlay =
+          this.offFormation.plays.find((p) => p.kind === "pat") ??
+          this.offFormation.plays[0];
+      } else {
+        // AI offense never punts/kicks or runs a conversion on a normal down
+        this.offFormation = pick(
+          OFFENSE_FORMATIONS.filter(
+            (x) => x.id !== "special" && x.id !== "convert"
+          )
+        );
+        this.offPlay = pick(this.offFormation.plays);
+      }
     }
     this.setupFormation();
     this.phase = "presnap";
@@ -252,6 +294,12 @@ export class Game {
       sep: Math.round(p.sep * 10) / 10,
       burst: Math.round(p.burst * 100) / 100,
       target: p.target,
+      blocked: p.blocked,
+      shed: p.shed,
+      engaged: Math.round(p.engaged * 100) / 100,
+      neutralized: this.neutralized(p),
+      defRole: p.defRole,
+      gap: p.gap,
     }));
   }
   debugPhase() {
@@ -325,7 +373,127 @@ export class Game {
   }
 
   availableFormations() {
-    return this.userOnOffense() ? OFFENSE_FORMATIONS : DEFENSE_FORMATIONS;
+    if (!this.userOnOffense()) return DEFENSE_FORMATIONS;
+    // a point-after try offers only the convert menu; normal downs hide it
+    if (this.tryMode) return OFFENSE_FORMATIONS.filter((f) => f.id === "convert");
+    return OFFENSE_FORMATIONS.filter((f) => f.id !== "convert");
+  }
+
+  // ---- test harness hooks (drive the engine directly, bypassing the menu and
+  //      possession flips so a suite can run a fixed script of plays) ----------
+  /** start a fresh HOME offensive series with the LOS at `ownYd` (0-100). */
+  testNewSeries(ownYd: number) {
+    this.possession = this.userTeam;
+    this.tryMode = false;
+    this.tryPending = false;
+    this.conversion = null;
+    this.pendingKickoff = false;
+    this.kickMode = null;
+    // keep the game from ending mid-sample (the arcade clock would otherwise
+    // run out over a long harness run and flip the phase to gameover)
+    this.quarter = 1;
+    this.clock = QUARTER_SECONDS;
+    this.setNewSeries(LEFT_GOAL + ownYd * YARD);
+    this.goToPlaycall();
+  }
+  /** jump straight to a HOME point-after try (snapped from the opponent's 3). */
+  testStartTry() {
+    this.possession = this.userTeam;
+    this.tryPending = false;
+    this.conversion = null;
+    this.tryMode = true;
+    const goal = RIGHT_GOAL; // home attacks right
+    this.los = clamp(goal - 3 * YARD, LEFT_GOAL, RIGHT_GOAL);
+    this.down = 1;
+    this.toGo = 0;
+    this.recomputeFirstDown();
+    this.goToPlaycall();
+  }
+  testChoose(formationId: string, playId: string) {
+    this.choosePlay(formationId, playId);
+  }
+  /** reseed the RNG so repeated identical play scripts sample real variance. */
+  testReseed(s: number) {
+    reseed(s >>> 0);
+  }
+  /** AI-drive the ball carrier on runs (so the suite isn't a motionless back). */
+  testAutoCarrier(on: boolean) {
+    this.testAutoRun = on;
+  }
+  /** flat per-side rating override (offense, defense). null = real rosters.
+   *  Lets the harness measure avg-vs-avg baselines and clean tier mismatches. */
+  testTiers(off: number | null, def: number | null) {
+    this.testFlatOff = off;
+    this.testFlatDef = def;
+  }
+  /** force the defensive matchup (formation+call); null = random AI defense. */
+  testDefense(formationId: string | null, playId: string | null) {
+    this.testDefFormation = formationId;
+    this.testDefPlay = playId;
+  }
+  /** list available formation/play ids so a harness can enumerate matchups. */
+  testPlaybooks() {
+    return {
+      offense: OFFENSE_FORMATIONS.map((f) => ({ id: f.id, plays: f.plays.map((p) => ({ id: p.id, kind: p.kind })) })),
+      defense: DEFENSE_FORMATIONS.map((f) => ({ id: f.id, plays: f.plays.map((p) => ({ id: p.id, cov: p.coverage, blitz: p.blitzers })) })),
+    };
+  }
+  /** read + reset the tackle-contest counters (broken-tackle rate). */
+  testBreakStats() {
+    const r = { attempts: this.tkAttempts, breaks: this.tkBreaks };
+    this.tkAttempts = 0;
+    this.tkBreaks = 0;
+    return r;
+  }
+  testSnap() {
+    if (this.phase === "presnap") this.snap();
+  }
+  testThrowOpen() {
+    const r = this.bestReceiver();
+    if (r) this.throwTo(r.id);
+  }
+  /** throw to a specific receiver slot key ("1".."4") — for depth/coverage tests. */
+  testThrowTo(key: string) {
+    const r = this.players.find(
+      (p) => p.team === this.possession && p.target === key
+    );
+    if (r) this.throwTo(r.id);
+  }
+  /** snapshot of the targeted receiver's separation + the in-flight ball, so the
+   *  harness can bucket catches by depth and contested/open. */
+  testReceivers() {
+    const off = this.possession;
+    return this.players
+      .filter((p) => p.team === off && p.target)
+      .map((p) => {
+        let nd = Infinity;
+        for (const d of this.players) {
+          if (d.team === off) continue;
+          nd = Math.min(nd, dist(p.x, p.y, d.x, d.y));
+        }
+        return {
+          key: p.target,
+          sep: Math.round((nd / YARD) * 10) / 10,
+          depth: Math.round((this.offDir() * (p.x - this.los)) / YARD),
+        };
+      });
+  }
+  testState() {
+    return {
+      phase: this.phase,
+      possession: this.possession,
+      score: { ...this.score },
+      msg: this.message,
+      los: Math.round(this.los),
+      conversion: this.conversion,
+      tryMode: this.tryMode,
+      kickMode: this.kickMode,
+      carrier: this.ball.carrier,
+      inAir: this.ball.inAir,
+      play: this.offPlay.id,
+      kind: this.offPlay.kind,
+      liveTime: Math.round(this.liveTime * 100) / 100,
+    };
   }
 
   // ---- series / down management -----------------------------------------
@@ -415,10 +583,12 @@ export class Game {
 
     this.assignDefense(offTeam, defTeam, dir, midY);
 
-    // build sprites
-    for (const p of this.players) this.makeSprite(p);
-    // keep the ball drawn on top of every player sprite
-    this.world.addChild(this.ballGfx);
+    // build sprites (skipped in headless: the sim runs without rendering)
+    if (!this.headless) {
+      for (const p of this.players) this.makeSprite(p);
+      // keep the ball drawn on top of every player sprite
+      this.world.addChild(this.ballGfx);
+    }
 
     // initial control: user controls QB (or runner) on offense, the MIKE / a
     // box defender on defense
@@ -565,7 +735,16 @@ export class Game {
     const offTeam = this.possession;
     const ball = this.ball;
 
-    if (this.offPlay.kind === "fg" || this.offPlay.kind === "punt") {
+    // a point-after try: PAT kick, or a one-shot run/pass for two
+    if (this.tryMode) {
+      this.conversion = this.offPlay.kind === "pat" ? "pat" : "two";
+    }
+
+    if (
+      this.offPlay.kind === "fg" ||
+      this.offPlay.kind === "punt" ||
+      this.offPlay.kind === "pat"
+    ) {
       this.startKick(this.offPlay.kind);
       return;
     }
@@ -588,7 +767,7 @@ export class Game {
   }
 
   // ---- special teams -----------------------------------------------------
-  private startKick(kind: "fg" | "punt") {
+  private startKick(kind: "fg" | "punt" | "pat") {
     this.liveTime = 0;
     const dir = this.offDir();
     const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
@@ -606,15 +785,16 @@ export class Game {
     this.kickMode = kind;
     this.audio.kick();
 
-    if (kind === "fg") {
-      // distance to the posts (back of end zone = +10 from goal line)
-      const yds = Math.abs(goalX - b.sx) / YARD + 10;
+    if (kind === "fg" || kind === "pat") {
+      // distance to the posts (back of end zone = +10 from goal line); a PAT is
+      // a fixed short kick, always inside range.
+      const yds = kind === "pat" ? 20 : Math.abs(goalX - b.sx) / YARD + 10;
       this.kickGood = yds <= 52 && rng() < this.fgProb(yds);
       b.tx = goalX + dir * (this.kickGood ? 14 * YARD : 2 * YARD);
       b.ty = WORLD_H / 2 + (this.kickGood ? 0 : (rng() - 0.5) * 8 * YARD);
       b.peak = 3.2 * YARD;
       b.ftime = Math.max(0.7, (Math.abs(b.tx - b.sx) / KICK_SPEED) * 1.1);
-      this.message = "FIELD GOAL…";
+      this.message = kind === "pat" ? "EXTRA POINT…" : "FIELD GOAL…";
     } else {
       // punt: 38-46 yards of hang, with a touchback if it reaches the end zone
       const puntYds = 38 + rng() * 8;
@@ -649,6 +829,7 @@ export class Game {
     const kind = this.kickMode;
     this.kickMode = null;
     if (kind === "fg") this.resolveFieldGoal();
+    else if (kind === "pat") this.resolvePAT();
     else this.resolvePunt();
   }
 
@@ -667,6 +848,41 @@ export class Game {
       // opponent takes over at the spot of the kick
       this.flipPossession(this.los);
     }
+  }
+
+  private resolvePAT() {
+    this.phase = "dead";
+    this.deadTimer = 1.6;
+    this.audio.whistle();
+    if (this.kickGood) {
+      this.score[this.possession] += 1;
+      this.message = "EXTRA POINT GOOD! +1";
+      this.audio.firstDown();
+    } else {
+      this.message = "MISSED PAT";
+      this.audio.turnover();
+    }
+    this.conversion = null;
+    this.tryMode = false;
+    this.pendingKickoff = true;
+  }
+
+  /** a two-point conversion play ended: scored => +2, anything else => 0 */
+  private endTry(scored: boolean) {
+    this.phase = "dead";
+    this.deadTimer = 1.6;
+    this.audio.whistle();
+    if (scored) {
+      this.score[this.possession] += 2;
+      this.message = "2-POINT IS GOOD! +2";
+      this.audio.touchdown();
+    } else {
+      this.message = "CONVERSION NO GOOD";
+      this.audio.turnover();
+    }
+    this.conversion = null;
+    this.tryMode = false;
+    this.pendingKickoff = true;
   }
 
   private resolvePunt() {
@@ -698,10 +914,24 @@ export class Game {
       if (this.deadTimer <= 0) this.afterPlay();
     }
 
-    this.updateCamera(dt);
-    this.render();
+    if (!this.headless) {
+      this.updateCamera(dt);
+      this.render();
+    }
     this.input.flush();
-    this.pushHud(false);
+    this.pushHud(false); // no-ops when no hud callback is attached (headless)
+  }
+
+  // ---- headless sim driver (deterministic, no Pixi/rendering) -------------
+  /** enable headless mode: skip all rendering so the sim can be stepped at full
+   *  speed in Node. The sim logic (stepLive + update*) is identical to the
+   *  browser; only presentation is bypassed, so results are bit-reproducible. */
+  setHeadless(on: boolean) {
+    this.headless = on;
+  }
+  /** advance the simulation by one fixed timestep (drive this in a tight loop). */
+  testStep(dt: number) {
+    this.update(dt);
   }
 
   private stepLive(dt: number) {
@@ -819,6 +1049,13 @@ export class Game {
 
       const isCarrier = carrier?.id === p.id;
       const isUser = p.id === this.controlledId && this.userOnOffense();
+
+      // test mode: let the engine run the ball carrier on a designed run so the
+      // suite exercises the real run game instead of a motionless human-held back
+      if (this.testAutoRun && isCarrier && this.offPlay.kind === "run") {
+        this.runToGoal(p, dt);
+        continue;
+      }
 
       if (isUser) {
         this.applyUserMove(p, dt);
@@ -1028,28 +1265,56 @@ export class Game {
     // on a designed run, aim through the hole until past the line, then turn upfield
     const behindLine = dir * (p.x - this.los) < 1.5 * YARD;
     if (this.offPlay.kind === "run" && behindLine) {
-      const holeY = clamp(
+      const baseHoleY = clamp(
         WORLD_H / 2 + (this.offPlay.hole ?? 0) * YARD,
         SIDELINE,
         WORLD_H - SIDELINE
       );
-      this.moveToward(p, this.los + dir * 4 * YARD, holeY, dt, 1);
+      // VISION: aim at the most open lane near the designed hole rather than
+      // running blindly into it. The back reads the front and cuts to daylight,
+      // so a free defender filling the designed gap doesn't auto-stuff the run.
+      let bestY = baseHoleY;
+      let bestScore = -Infinity;
+      const fillX = this.los + dir * 1 * YARD;
+      for (let off = -7; off <= 7; off += 1) {
+        const ly = clamp(baseHoleY + off * YARD, SIDELINE + YARD, WORLD_H - SIDELINE - YARD);
+        let nd = Infinity;
+        for (const d of this.players) {
+          if (d.team === p.team || this.neutralized(d) || d.stun > 0) continue;
+          if (Math.abs(dir * (d.x - this.los)) > 4 * YARD) continue; // only defenders near the LOS
+          nd = Math.min(nd, dist(fillX, ly, d.x, d.y));
+        }
+        const score = nd - Math.abs(ly - baseHoleY) * 0.35; // prefer open AND near the call
+        if (score > bestScore) {
+          bestScore = score;
+          bestY = ly;
+        }
+      }
+      this.moveToward(p, this.los + dir * 4 * YARD, bestY, dt, 1);
       return;
     }
-    // avoid nearest defenders, run for the end zone
-    let ax = 0;
-    let ay = 0;
+    // past the line: ALWAYS press downfield, sliding laterally to the most open
+    // lane. (The old code let the avoidance vector point backward and cancel the
+    // forward drive, so a surrounded back froze in the pile for a full second
+    // instead of falling forward.) Avoidance only steers sideways now.
+    let lat = 0;
+    let nearestAhead = Infinity;
     for (const d of this.players) {
       if (d.team === p.team) continue;
       const dd = dist(p.x, p.y, d.x, d.y);
-      if (dd < 4.5 * YARD && dd > 1) {
-        const w = (4.5 * YARD - dd) / (4.5 * YARD);
-        ax += ((p.x - d.x) / dd) * w;
-        ay += ((p.y - d.y) / dd) * w;
+      const downfield = dir * (d.x - p.x); // >0 = defender is ahead of the back
+      if (dd < 5 * YARD && dd > 1 && downfield > -1.5 * YARD) {
+        const w = (5 * YARD - dd) / (5 * YARD);
+        lat += ((p.y - d.y) / dd) * w; // cut away from him laterally
+        if (this.neutralized(d) === false && dd < nearestAhead) nearestAhead = dd;
       }
     }
-    const ty = clamp(p.y + ay * 4 * YARD, SIDELINE, WORLD_H - SIDELINE);
-    const tx = p.x + dir * 3 * YARD + ax * 1.2 * YARD;
+    // hit the second level with a burst: a clean crease (no free defender close
+    // ahead) lets the back accelerate into open space — this is what turns a
+    // 3-yard gain into an explosive run instead of getting run down at the LOS.
+    if (nearestAhead > 3 * YARD) p.burst = Math.max(p.burst, 0.25);
+    const ty = clamp(p.y + lat * 3.5 * YARD, SIDELINE, WORLD_H - SIDELINE);
+    const tx = p.x + dir * 6 * YARD; // commit forward, never steer backward
     void goalX;
     this.moveToward(p, tx, ty, dt, 1);
   }
@@ -1085,8 +1350,20 @@ export class Game {
         continue;
       }
       if (ballCarried) {
-        const past = dir * (carrier!.x - this.los) > 0.5 * YARD;
-        if (this.offPlay.kind === "run" && !past) {
+        // a defender actively engaged by a blocker is CONTROLLED by that block
+        // (driveBlock/engageBlock position him) — he can't also run his own
+        // pursuit, or he'd drift into the backfield through the block. Zero his
+        // intent and let the block move him.
+        if (this.neutralized(p)) {
+          p.dvx = 0;
+          p.dvy = 0;
+          continue;
+        }
+        // on a run, runFit governs the whole front+secondary (gap discipline for
+        // the box, CONTAIN for the DBs) until the back clears the front seven —
+        // it internally flips to pursuit once he's at the second level. A scramble
+        // / catch-and-run is straight pursuit.
+        if (this.offPlay.kind === "run") {
           this.runFit(p, carrier!, dt);
         } else {
           this.pursueCarrier(p, carrier!, dt);
@@ -1120,20 +1397,39 @@ export class Game {
    * so the front doesn't all crash one point and a crease can open */
   private runFit(p: Player, carrier: Player, dt: number) {
     const dir = this.offDir();
+    const past = dir * (carrier.x - this.los); // yards the back is past the LOS
+    // once the back clears the front seven (~3yd), the fit is broken — everyone
+    // pursues, including the secondary rallying to the ball.
+    if (past > 3 * YARD) {
+      this.pursueCarrier(p, carrier, dt);
+      return;
+    }
     const frontSeven = p.defRole === "DL" || p.defRole === "LB";
     if (!frontSeven || p.gap === undefined) {
-      // DBs play contain / run support — stay a hair outside and behind
-      const to = this.intercept(p, carrier);
-      this.moveToward(p, to.x, to.y, dt, this.neutralized(p) ? 0.5 : 0.85);
+      // DBs play CONTAIN: hold a cushion downfield and don't crash the mesh point;
+      // they rally once the back breaks past the front (handled above).
+      const cx = this.los + dir * 3.5 * YARD; // contain depth
+      const cy = clamp(
+        carrier.y + Math.sign(carrier.y - WORLD_H / 2 || 1) * 1.5 * YARD,
+        SIDELINE,
+        WORLD_H - SIDELINE
+      );
+      this.moveToward(p, cx, cy, dt, this.neutralized(p) ? 0.4 : 0.6);
       return;
     }
     const gx = this.los + dir * 0.5 * YARD;
     const gy = clamp(WORLD_H / 2 + p.gap * YARD, SIDELINE, WORLD_H - SIDELINE);
-    // hold the gap until the back is right on top of it, then attack downhill
-    const threat = dist(carrier.x, carrier.y, gx, gy) < 2.5 * YARD;
+    // hold the gap until the back is right on top of it, then FILL it. A run
+    // defender meets the back at the line of scrimmage — he does not chase a deep
+    // back into the backfield (that penetration was hitting the i-form back 3-4yd
+    // deep and turning routine runs into stuffs). Fill point tracks the back's
+    // lane but never past ~1yd into the backfield.
+    const threat = dist(carrier.x, carrier.y, gx, gy) < 2.8 * YARD;
     if (threat) {
       const to = this.intercept(p, carrier);
-      this.moveToward(p, to.x, to.y, dt, this.neutralized(p) ? 0.4 : 1);
+      const fillX = this.los + dir * 1 * YARD; // fill at the line, not in the backfield
+      const tx = dir > 0 ? Math.min(to.x, fillX) : Math.max(to.x, fillX);
+      this.moveToward(p, tx, to.y, dt, this.neutralized(p) ? 0.4 : 1);
     } else {
       this.moveToward(p, gx, gy, dt, this.neutralized(p) ? 0.35 : 0.9);
     }
@@ -1435,10 +1731,26 @@ export class Game {
   private driveBlock(ol: Player, tgt: Player, dir: number, holeY: number, dbl: boolean, dt: number) {
     this.moveTowardRaw(ol, tgt.x + dir * 0.4 * YARD, tgt.y, 1);
     if (dist(ol.x, ol.y, tgt.x, tgt.y) < BLOCK_R * 1.6) {
-      this.resolveBlock(ol, tgt, false, dbl, dt);
+      // run blocks favor the blocker: the OL fires out on the snap count while the
+      // DL reacts, so run-block win rate is ~75%, not the 50/50 of an even pass rep.
+      // (lev<0 slows the defender's shed.) Without this the front over-penetrated
+      // and stuffed ~44% even at the base front.
+      this.resolveBlock(ol, tgt, false, dbl, dt, -8);
+      // ANCHOR: while a blocker is engaged and the defender hasn't shed, the
+      // lineman rides him and keeps him OUT of the backfield. Without this every
+      // DL shot ~4yd past the LOS and met the deep back behind the line — the
+      // dominant cause of the ~50% stuff rate. A shed (beaten) defender penetrates.
+      if (tgt.blocked && !tgt.shed && tgt.stun <= 0) {
+        const anchor = this.los + dir * 0.5 * YARD;
+        if (dir * (tgt.x - anchor) > 0) tgt.x = anchor;
+      }
       if (this.neutralized(tgt)) {
-        tgt.x += dir * 0.45; // drive back toward their own side
-        tgt.y += Math.sign(tgt.y - holeY || 1) * 0.45; // and away from the hole
+        // a WON run block drives the defender off the ball, opening a crease.
+        // Kept modest so the lineman keeps CONTACT (over-driving made him lose the
+        // engagement range and the block dropped). dt-scaled.
+        const push = (dbl ? 4.0 : 2.6) * YARD * dt; // ~2.6–4.0 yd/s of drive
+        tgt.x += dir * push; // back toward their own side
+        tgt.y += Math.sign(tgt.y - holeY || 1) * push * 0.7; // and away from the hole
       }
     }
   }
@@ -1507,6 +1819,7 @@ export class Game {
     b.t = 0;
     b.elapsed = 0;
     b.tip = false;
+    b.swatDone = false;
     const throwDist = dist(qb.x, qb.y, landX, landY);
     b.ftime = Math.max(0.32, throwDist / PASS_SPEED);
     // every throw arcs enough to clear underneath defenders; long balls higher
@@ -1554,49 +1867,83 @@ export class Game {
     const offTeam = this.possession;
     const target = b.targetId ? this.byId(b.targetId) : null;
 
-    // nearest eligible receiver and nearest defender to the ball (reach-gated)
-    let rec: Player | null = null;
-    let rd = Infinity;
+    // The ball is only PLAYABLE while it's within a defender/receiver's jump
+    // reach. The arc makes that true in two windows — just off the QB's hand
+    // (RELEASE zone: batted at the line) and dropping into the catch (LANDING
+    // zone: jump ball) — and false through the high middle of the flight.
+    if (b.z > REACH) {
+      if (b.t >= 1) this.incomplete();
+      return; // sailing high over everyone
+    }
+
+    // The catch belongs to the INTENDED receiver — the man auto-running to the
+    // landing spot. (Every eligible receiver carries a formation `target` key,
+    // so picking "nearest with a target" would let an unrelated WR who happens
+    // to drift past steal the ball.) Find the nearest defender separately.
+    const rec = target && target.target ? target : null;
+    const rd = rec ? dist(rec.x, rec.y, b.x, b.y) : Infinity;
     let nd: Player | null = null;
     let ndDist = Infinity;
     for (const p of this.players) {
-      if (b.z > REACH) break; // ball still too high for anyone to play
+      if (p.team === offTeam) continue;
       const d = dist(p.x, p.y, b.x, b.y);
-      if (p.team === offTeam) {
-        if (p.target && d < rd) {
-          rd = d;
-          rec = p;
-        }
-      } else if (d < ndDist) {
+      if (d < ndDist) {
         ndDist = d;
         nd = p;
       }
     }
 
-    // The catch is decided AT THE LANDING (where the receiver is waiting), so a
-    // defender can't snipe the descending ball a few yards up-path. In FLIGHT,
-    // only a defender directly under the ball AND clearly in front of the
-    // receiver can pick it off (a true jumped route).
-    const atLanding = b.t >= 0.96 || dist(b.x, b.y, b.tx, b.ty) < 1.0 * YARD;
+    const fromQB = dist(b.x, b.y, b.sx, b.sy);
+    const toLand = dist(b.x, b.y, b.tx, b.ty);
+    // a defender close enough to the ball to genuinely contest the catch
+    const contestDef = nd && ndDist <= CATCH_AREA ? nd : null;
 
-    if (!atLanding) {
-      if (
-        nd &&
-        ndDist <= DEFLECT_R &&
-        b.z <= REACH &&
-        (!rec || ndDist < rd - 0.8 * YARD)
-      ) {
-        return this.resolveDefenderBall(nd, target, ndDist); // jumped the route
+    // ---- LANDING ZONE: ball dropping into the catch area, both can play it ----
+    // Gated on PROXIMITY to the landing (not flight time): the receiver waits at
+    // the spot, so resolving only once the ball is actually within reach avoids
+    // missing the catch while the ball is still yards up-path. b.t>=1 is the
+    // backstop, but at t=1 the ground position IS the landing, so toLand<LAND_ZONE
+    // already covers it.
+    if (toLand < LAND_ZONE || b.t >= 1) {
+      // the receiver gets his ball unless a defender is clearly closer to it
+      if (rec && rd <= CATCH_AREA && (!nd || rd <= ndDist + LEAD_MARGIN)) {
+        return this.resolveCatch(rec, contestDef, ndDist);
       }
-      return; // let it finish its flight to the landing
+      if (nd && ndDist <= CATCH_AREA) {
+        return this.resolveDefenderBall(nd, target, ndDist);
+      }
+      if (b.t >= 1) this.incomplete();
+      return;
     }
 
-    // at the landing
-    const recNear = rec && rd <= CATCH_R * 1.5;
-    const defNear = nd && ndDist <= CATCH_R * 1.5;
-    if (recNear) return this.resolveCatch(rec!, defNear ? nd : null, ndDist);
-    if (defNear) return this.resolveDefenderBall(nd!, target, ndDist);
-    this.incomplete(); // nobody there — overthrown
+    // ---- RELEASE ZONE: a defender under the low ball gets ONE deflection
+    //      attempt at the line (a one-shot latch, so the per-frame check can't
+    //      re-roll a near-certain swat while the ball clears the rusher). ----
+    if (fromQB < RELEASE_ZONE) {
+      if (nd && ndDist <= SWAT_R && !b.swatDone) {
+        b.swatDone = true;
+        return this.resolveLineSwat(nd);
+      }
+      if (rec && rd <= CATCH_R) return this.resolveCatch(rec, contestDef, ndDist); // quick screen
+      return;
+    }
+
+    // ---- MID FLIGHT but still low (a flat throw): only a defender directly
+    //      under it, clearly ahead of the receiver, can undercut it ----
+    if (nd && ndDist <= DEFLECT_R && (!rec || ndDist < rd - LEAD_MARGIN)) {
+      return this.resolveDefenderBall(nd, target, ndDist);
+    }
+    if (rec && rd <= CATCH_R) return this.resolveCatch(rec, contestDef, ndDist);
+  }
+
+  /** a defender under the low release gets one swing at the ball; most of the
+   *  time the throw clears his outstretched arm, occasionally he gets a piece. */
+  private resolveLineSwat(d: Player) {
+    const roll = rng();
+    if (roll < 0.72) return; // clears the rusher's reach — the common case
+    if (roll < 0.78) return this.interception(d); // 6% pick at the line
+    if (roll < 0.88) return this.startTip(d); // 10% tipped up — live ball
+    return this.batDown(); // 12% knocked down (incomplete)
   }
 
   /** the intended receiver is at the ball: open => catch (rare drop); contested
@@ -1720,7 +2067,12 @@ export class Game {
   // ---- integration + collisions -----------------------------------------
   /** attach pre-baked ratings + derive kinematics (px units) from SPD/ACC/AGI */
   private attachRatings(p: Player, team: Team, slot: string) {
-    const r = ROSTERS[team][rosterKey(slot, p.defRole)];
+    let r = ROSTERS[team][rosterKey(slot, p.defRole)];
+    // test-only: override a side's ratings with a flat tier value so the harness
+    // can measure neutral (avg-vs-avg) baselines and clean tier mismatches,
+    // instead of being skewed by the two boom-bust POC rosters.
+    const flat = team === "home" ? this.testFlatOff : this.testFlatDef;
+    if (flat != null) r = new Proxy({} as Record<string, number>, { get: () => flat });
     p.rat = r;
     const SPD = rate(r, "SPD");
     const ACC = rate(r, "ACC");
@@ -1804,32 +2156,62 @@ export class Game {
     }
     // safety (tackled in own end zone) — checked via tackle below
 
-    // tackle on contact with any FREE defender (an engaged blocker can't make
-    // the tackle — this is what makes blocks matter and lanes/pockets hold)
+    // tackle on contact with a FREE defender (an engaged blocker can't make the
+    // tackle — that's what makes blocks matter). The hit is a ratings CONTEST,
+    // not an automatic stop: a back with momentum can break a solo arm tackle for
+    // extra yards, while gang tackling brings him down. Pick the nearest free
+    // defender in range and count how many are converging (the gang).
+    let tk: Player | null = null;
+    let tkd = Infinity;
+    let gang = 0;
     for (const p of this.players) {
       if (p.team === c.team) continue;
       if (this.neutralized(p) || p.stun > 0) continue; // engaged or knocked down
-      if (dist(p.x, p.y, c.x, c.y) < TACKLE_R) {
-        // small break-tackle chance when the user is sprinting
-        if (
-          c.id === this.controlledId &&
-          this.userOnOffense() &&
-          this.input.turbo() &&
-          rng() < 0.12
-        ) {
-          p.x -= (p.x - c.x) * 0.5;
-          p.y -= (p.y - c.y) * 0.5;
-          continue;
+      const d = dist(p.x, p.y, c.x, c.y);
+      if (d < TACKLE_R) {
+        gang++;
+        if (d < tkd) {
+          tkd = d;
+          tk = p;
         }
-        // safety?
-        if (dir > 0 ? c.x <= ownGoal : c.x >= ownGoal) {
-          this.safety();
-          return;
-        }
+      }
+    }
+    if (tk) {
+      // brought down in his own end zone = safety, no contest
+      if (dir > 0 ? c.x <= ownGoal : c.x >= ownGoal) {
+        this.safety();
+        return;
+      }
+      const atkR =
+        (rate(tk.rat, "TAK") + rate(tk.rat, "HIT") + rate(tk.rat, "PWR") + rate(tk.rat, "PUR")) / 4;
+      const defR =
+        (rate(c.rat, "BTK") + rate(c.rat, "ELU") + rate(c.rat, "TRK") + rate(c.rat, "AGI")) / 4;
+      const spd = Math.min(1, Math.hypot(c.vx, c.vy) / (c.vmax || 1));
+      const userTurbo =
+        c.id === this.controlledId && this.userOnOffense() && this.input.turbo();
+      const res = contest({
+        atk: atkR,
+        def: defR,
+        kind: "tackle",
+        firstContact: true,
+        // tackling is the default outcome (+12); each extra converging defender
+        // makes a break far less likely (+13); a sprinting human gets a nudge.
+        leverage: 10 + (gang - 1) * 13 - (userTurbo ? 8 : 0),
+        momentum: -spd * 12, // a back at full speed runs through arm tackles
+      });
+      this.tkAttempts++;
+      if (res.win) {
         this.audio.tackle();
         this.endPlay({ type: "tackle", spotX: c.x, spotY: c.y });
         return;
       }
+      // BROKEN TACKLE: the would-be tackler is shaken off (stunned out of the
+      // pursuit) and the back bursts forward. The stun latches this defender so
+      // he can't instantly re-contest the same frame.
+      this.tkBreaks++;
+      tk.stun = 0.45 + res.sev * 0.5;
+      c.burst = Math.max(c.burst, 0.35 + res.sev * 0.4);
+      this.audio.tackle();
     }
   }
 
@@ -1902,6 +2284,12 @@ export class Game {
     by?: Player;
   }) {
     if (this.phase !== "live") return;
+    // a two-point try that didn't reach the end zone (tackle, incompletion, or
+    // turnover) is simply no good — resolve it here, no downs/series bookkeeping.
+    if (this.conversion === "two") {
+      this.endTry(false);
+      return;
+    }
     this.phase = "dead";
     this.deadTimer = 1.4;
     this.audio.whistle();
@@ -1959,13 +2347,18 @@ export class Game {
   }
 
   private touchdown() {
+    // crossing the goal on a two-point play is the conversion, not a TD
+    if (this.conversion === "two") {
+      this.endTry(true);
+      return;
+    }
     this.phase = "dead";
     this.deadTimer = 2.0;
-    this.score[this.possession] += 7;
+    this.score[this.possession] += 6;
     this.message = "TOUCHDOWN!";
     this.audio.whistle();
     this.audio.touchdown();
-    this.pendingKickoff = true;
+    this.tryPending = true; // afterPlay sets up the point-after try
   }
 
   private safety() {
@@ -1987,6 +2380,22 @@ export class Game {
     if (this.quarter > 4) {
       this.phase = "gameover";
       this.pushHud(true);
+      return;
+    }
+    // a touchdown sets up the point-after try (PAT kick or two-point play) for
+    // the SAME offense, snapped from the opponent's 3, before any kickoff.
+    if (this.tryPending) {
+      this.tryPending = false;
+      this.tryMode = true;
+      this.conversion = null;
+      const dir = this.offDir();
+      const goal = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
+      this.los = clamp(goal - dir * 3 * YARD, LEFT_GOAL, RIGHT_GOAL);
+      this.down = 1;
+      this.toGo = 0;
+      this.recomputeFirstDown();
+      this.message = "POINT AFTER";
+      this.goToPlaycall();
       return;
     }
     if (this.pendingKickoff) {
@@ -2325,6 +2734,7 @@ function freshBall(): BallState {
     targetId: null,
     peak: 0,
     tip: false,
+    swatDone: false,
   };
 }
 

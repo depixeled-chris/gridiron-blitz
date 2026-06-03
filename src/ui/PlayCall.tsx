@@ -220,7 +220,7 @@ function PlayArt({ play, formation, offense }: { play: AnyPlay; formation: AnyFo
         routes.push({ slot, pts: [{ lat: s.lat, fwd: s.fwd }, ...wp], run: op.kind === "run" && slot === "R" });
       }
     }
-    if (op.kind === "fg" || op.kind === "punt") pts.push({ lat: 0, fwd: 18 });
+    if (op.kind === "fg" || op.kind === "punt" || op.kind === "pat") pts.push({ lat: 0, fwd: 18 });
     const map = fitter(pts);
     return (
       <svg className="pc-art" viewBox={`0 0 ${W} ${H}`}>
@@ -236,10 +236,10 @@ function PlayArt({ play, formation, offense }: { play: AnyPlay; formation: AnyFo
           const color = r.run ? "#ffd34d" : "#8fb8ff";
           return (<g key={r.slot}><path d={d} fill="none" stroke={color} strokeWidth="1.7" strokeLinejoin="round" /><circle cx={e.x} cy={e.y} r="1.7" fill={color} /></g>);
         })}
-        {(op.kind === "fg" || op.kind === "punt") && (() => {
+        {(op.kind === "fg" || op.kind === "punt" || op.kind === "pat") && (() => {
           const s = map(pos.QB.lat, pos.QB.fwd); const e = map(0, 18);
           return (<g><path d={`M ${s.x} ${s.y} Q ${(s.x + e.x) / 2} ${e.y - 18} ${e.x} ${e.y}`} fill="none" stroke="#ffd34d" strokeWidth="1.8" strokeDasharray="3 3" />
-            {op.kind === "fg" && (<g stroke="#fff" strokeWidth="1.8"><line x1={e.x - 6} y1={e.y - 10} x2={e.x - 6} y2={e.y + 4} /><line x1={e.x + 6} y1={e.y - 10} x2={e.x + 6} y2={e.y + 4} /><line x1={e.x - 9} y1={e.y - 2} x2={e.x + 9} y2={e.y - 2} /></g>)}</g>);
+            {(op.kind === "fg" || op.kind === "pat") && (<g stroke="#fff" strokeWidth="1.8"><line x1={e.x - 6} y1={e.y - 10} x2={e.x - 6} y2={e.y + 4} /><line x1={e.x + 6} y1={e.y - 10} x2={e.x + 6} y2={e.y + 4} /><line x1={e.x - 9} y1={e.y - 2} x2={e.x + 9} y2={e.y - 2} /></g>)}</g>);
         })()}
       </svg>
     );

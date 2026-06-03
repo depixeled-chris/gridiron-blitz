@@ -183,6 +183,21 @@ const SPECIAL: Record<string, OffensePlay> = {
   fieldgoal: { id: "fieldgoal", name: "FIELD GOAL", kind: "fg", routes: { A: [], B: [], C: [], R: [] } },
 };
 
+// point-after attempt: kick the extra point, or go for two (one all-or-nothing play)
+const CONVERT: Record<string, OffensePlay> = {
+  xp: { id: "xp", name: "EXTRA POINT", kind: "pat", routes: { A: [], B: [], C: [], R: [] } },
+  twodive: { id: "twodive", name: "2PT DIVE", kind: "run", runner: "RB", hole: 0, routes: runRoutes(0) },
+  twoslants: {
+    id: "twoslants", name: "2PT SLANTS", kind: "pass",
+    routes: {
+      A: [{ fwd: 2, lat: 0 }, { fwd: 5, lat: -4 }],
+      B: [{ fwd: 2, lat: 0 }, { fwd: 5, lat: 4 }],
+      C: [{ fwd: 3, lat: 2 }],
+      R: [{ fwd: 1, lat: 7 }],
+    },
+  },
+};
+
 export const OFFENSE_FORMATIONS: OffenseFormation[] = [
   {
     id: "shotgun", name: "SHOTGUN", tag: "BALANCED",
@@ -223,6 +238,12 @@ export const OFFENSE_FORMATIONS: OffenseFormation[] = [
     id: "special", name: "SPECIAL TEAMS", tag: "KICK",
     align: { QB: { fwd: -8, lat: 0 }, R: { fwd: -7, lat: -2 } },
     plays: [SPECIAL.punt, SPECIAL.fieldgoal],
+  },
+  {
+    // shown only during a point-after try (filtered out of normal play-calling)
+    id: "convert", name: "POINT AFTER", tag: "PAT / 2PT",
+    align: { QB: { fwd: -1, lat: 0 }, R: { fwd: -3, lat: 0 }, F: { fwd: -2, lat: 0 }, A: { lat: -5 }, B: { lat: 5 }, C: { lat: 3 } },
+    plays: [CONVERT.xp, CONVERT.twodive, CONVERT.twoslants],
   },
 ];
 

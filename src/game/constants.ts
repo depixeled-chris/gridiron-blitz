@@ -46,6 +46,13 @@ export const BLOCKED_REACH = 1.0 * YARD; // an engaged blocker can't go up for i
 export const DEFLECT_R = 0.9 * YARD; // a defender must be ~this close under the ball
 export const INT_CHANCE = 0.3; // chance a defender in reach picks it cleanly
 export const TIP_CHANCE = 0.5; // of the rest, chance it tips up loose vs hits the turf
+
+// catch / jump-ball resolution geometry (the active completion-rate tuning knobs)
+export const CATCH_AREA = CATCH_R * 1.6; // radius around the ball a receiver/defender can play it
+export const LAND_ZONE = 2.4 * YARD; // ball-to-landing distance that opens the catch resolution
+export const RELEASE_ZONE = 4.5 * YARD; // ball-to-QB distance inside which the throw can be batted at the line
+export const SWAT_R = DEFLECT_R * 1.2; // a line defender must be this close under the release to attempt a swat
+export const LEAD_MARGIN = 0.7 * YARD; // a defender must be this much closer to the ball than the WR to undercut it
 export const QUARTER_SECONDS = 120; // arcade-short quarters
 export const PLAY_CLOCK = 25;
 

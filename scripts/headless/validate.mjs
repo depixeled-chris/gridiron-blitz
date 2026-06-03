@@ -1,0 +1,94 @@
+// Matchup- and tier-aware realism validation, headless + deterministic.
+//   node scripts/headless/build.mjs && node scripts/headless/validate.mjs [section]
+// section = rush | rushtier | pass | coverage | all (default)
+import { Game } from "./.game-headless.mjs";
+
+const DT = 1 / 60;
+const g = new Game();
+g.setHeadless(true);
+g.startGame();
+g.testAutoCarrier(true);
+const SECTION = process.argv[2] || "all";
+let SEED = 1;
+const reseed = () => g.testReseed((SEED = (SEED * 1103515245 + 12345) & 0x7fffffff));
+
+function play({ off = null, def = null, defForm, defPlay, form, pid, throwAt = null, throwKey = null, los = 40 }) {
+  g.testTiers(off, def);
+  g.testDefense(defForm, defPlay);
+  g.testNewSeries(los);
+  const before = g.testState();
+  reseed();
+  g.testChoose(form, pid);
+  g.testSnap();
+  let s = before, threw = false;
+  for (let k = 0; k < 340; k++) {
+    if (throwAt !== null && k === throwAt) { threw = true; if (throwKey) g.testThrowTo(throwKey); else g.testThrowOpen(); }
+    g.testStep(DT);
+    s = g.testState();
+    if (s.phase !== "live" && k > 2) break;
+  }
+  return { gain: Math.round((s.los - before.los) / 22), msg: s.msg, carrier: s.carrier, threw, score: s.score.home - before.score.home };
+}
+
+const pct = (a, f) => Math.round(a.filter(f).length / a.length * 100);
+const avg = (a) => Math.round(a.reduce((x, y) => x + y, 0) / a.length * 10) / 10;
+
+function rushCell(label, opts, N = 120) {
+  const runs = ["dive", "iso", "power", "counter", "sweep"];
+  const ys = [];
+  for (let i = 0; i < N; i++) ys.push(play({ ...opts, form: "iform", pid: runs[i % 5] }).gain);
+  console.log(`  ${label.padEnd(30)} avg ${String(avg(ys)).padStart(4)}  stuff ${String(pct(ys, (y) => y <= 0)).padStart(3)}%  succ ${String(pct(ys, (y) => y >= 4 && y <= 9)).padStart(3)}%  exp10+ ${String(pct(ys, (y) => y >= 10)).padStart(3)}%  max ${Math.max(...ys)}`);
+}
+
+function rush() {
+  console.log("\n=== RUSH by DEFENSIVE MATCHUP (neutral 75v75) — box count should swing it ===");
+  console.log("  NFL feel: vs heavy box high stuff; vs base ~20% stuff; vs light box (dime/prevent) gash");
+  rushCell("vs GOAL-LINE (heavy box)", { defForm: "goalline", defPlay: "man" });
+  rushCell("vs 5-2 (run-stuff 7box)", { defForm: "fivetwo", defPlay: "cover2" });
+  rushCell("vs 4-3 base cover3", { defForm: "fourthree", defPlay: "cover3" });
+  rushCell("vs NICKEL cover2", { defForm: "nickel", defPlay: "cover2" });
+  rushCell("vs DIME cover4 (light box)", { defForm: "dime", defPlay: "cover4" });
+  rushCell("vs PREVENT (4-3 cover4)", { defForm: "fourthree", defPlay: "prevent" });
+}
+
+function rushtier() {
+  console.log("\n=== RUSH by RB/FRONT TIER (vs 4-3 base cover3) ===");
+  console.log("  NFL: stuff bad~26 avg~20 elite~16; back tier fattens explosive, line owns stuff");
+  rushCell("RB bad60 v avg75 front", { off: 60, def: 75, defForm: "fourthree", defPlay: "cover3" });
+  rushCell("RB avg75 v avg75 front", { off: 75, def: 75, defForm: "fourthree", defPlay: "cover3" });
+  rushCell("RB good83 v avg75 front", { off: 83, def: 75, defForm: "fourthree", defPlay: "cover3" });
+  rushCell("RB elite90 v avg75 front", { off: 90, def: 75, defForm: "fourthree", defPlay: "cover3" });
+  rushCell("avg75 v bad60 front", { off: 75, def: 60, defForm: "fourthree", defPlay: "cover3" });
+  rushCell("avg75 v elite90 front", { off: 75, def: 90, defForm: "fourthree", defPlay: "cover3" });
+}
+
+function passCell(label, opts, throwAt, throwKey, N = 100) {
+  let comp = 0, inc = 0, intc = 0, sack = 0;
+  for (let i = 0; i < N; i++) {
+    const r = play({ ...opts, throwAt, throwKey });
+    if (/INTERCEPT|TURNOVER/.test(r.msg)) intc++;
+    else if (r.carrier && r.carrier.startsWith("home_") && !r.carrier.endsWith("_QB")) comp++;
+    else if (!r.threw || (r.carrier && r.carrier.endsWith("_QB"))) sack++;
+    else inc++;
+  }
+  const att = comp + inc + intc;
+  console.log(`  ${label.padEnd(30)} comp ${String(att ? Math.round(comp / att * 100) : 0).padStart(3)}%  INT ${String(Math.round(intc / N * 100)).padStart(3)}%  sack ${String(Math.round(sack / N * 100)).padStart(3)}%`);
+}
+
+function pass() {
+  console.log("\n=== PASS by DEPTH × MATCHUP (neutral 75v75, throw to A=key 1) ===");
+  console.log("  NFL: short ~73%, intermediate ~52%, deep ~37%; vs prevent easy short/hard deep");
+  passCell("slants(short) v 4-3 cover3", { off: 75, def: 75, defForm: "fourthree", defPlay: "cover3", form: "shotgun", pid: "slants" }, 36, "1");
+  passCell("crossers(mid) v 4-3 cover3", { off: 75, def: 75, defForm: "fourthree", defPlay: "cover3", form: "shotgun", pid: "crossers" }, 60, "1");
+  passCell("fourverts(deep) v 4-3 cover3", { off: 75, def: 75, defForm: "fourthree", defPlay: "cover3", form: "shotgun", pid: "fourverts" }, 90, "1");
+  passCell("fourverts(deep) v PREVENT", { off: 75, def: 75, defForm: "fourthree", defPlay: "prevent", form: "shotgun", pid: "fourverts" }, 90, "1");
+  passCell("slants(short) v PREVENT", { off: 75, def: 75, defForm: "fourthree", defPlay: "prevent", form: "shotgun", pid: "slants" }, 36, "1");
+}
+
+const all = { rush, rushtier, pass };
+const t0 = Date.now();
+console.log(`HEADLESS VALIDATE — ${new Date().toISOString()}`);
+if (SECTION === "all") for (const k of Object.keys(all)) all[k]();
+else if (all[SECTION]) all[SECTION]();
+else console.log("unknown section");
+console.log(`\n(${Date.now() - t0}ms)`);

@@ -29,7 +29,7 @@ export interface RouteNode {
 export interface OffensePlay {
   id: string;
   name: string;
-  kind: "run" | "pass" | "fg" | "punt";
+  kind: "run" | "pass" | "fg" | "punt" | "pat";
   /** which skill player carries on a run play */
   runner?: "RB" | "QB";
   /** designed run hole: lateral yards from center toward the play side */
@@ -169,6 +169,8 @@ export interface BallState {
   peak: number;
   /** true while the ball is a live loose ball after a tip — anyone can grab it */
   tip: boolean;
+  /** one-shot latch: a line defender already got his single deflection attempt this throw */
+  swatDone: boolean;
 }
 
 export interface HudState {
