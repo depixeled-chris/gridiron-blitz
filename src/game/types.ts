@@ -130,11 +130,13 @@ export interface Player {
   defRole?: DefRole;
   /** run-fit gap this defender owns (lateral yards from center) */
   gap?: number;
-  /** brief stun after a juke/block */
+  /** knockdown timer (s): pancaked / off-balance, can't move or make a play */
   stun: number;
   blocked: boolean;
   /** seconds this defender has been continuously engaged by a block */
   engaged: number;
+  /** true once a defender has BEATEN his block this play (won the matchup) */
+  shed: boolean;
 }
 
 export interface BallState {

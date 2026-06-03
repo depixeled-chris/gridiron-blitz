@@ -14,7 +14,6 @@ import {
   QUARTER_SECONDS,
   REACH,
   RIGHT_GOAL,
-  SHED_TIME,
   SIDELINE,
   SPEED,
   TACKLE_R,
@@ -32,6 +31,7 @@ import { Input } from "./input";
 import { Sfx } from "./audio";
 import { DEFENSE_FORMATIONS, OFFENSE_BASE, OFFENSE_FORMATIONS } from "./plays";
 import { ROSTERS, rate } from "./ratings";
+import { contest } from "./contest";
 import type {
   BallState,
   DefenseFormation,
@@ -542,6 +542,12 @@ export class Game {
     this.throwTimer = 0;
     this.liveTime = 0;
     this.kickMode = null;
+    // fresh matchup state for the new play
+    for (const p of this.players) {
+      p.shed = false;
+      p.stun = 0;
+      p.engaged = 0;
+    }
     const offTeam = this.possession;
     const ball = this.ball;
 
@@ -696,14 +702,15 @@ export class Game {
     this.liveTime += dt;
     if (this.switchCooldown > 0) this.switchCooldown -= dt;
 
-    // age engagement from last frame's blocks, then clear for this frame
+    // age engagement from last frame's blocks, clear for this frame, run stuns down
     for (const p of this.players) {
       if (p.blocked) p.engaged += dt;
       else p.engaged = Math.max(0, p.engaged - 2 * dt);
       p.blocked = false;
+      if (p.stun > 0) p.stun = Math.max(0, p.stun - dt);
     }
 
-    this.updateBlocking();
+    this.updateBlocking(dt);
     this.updateOffense(dt);
     this.updateDefense(dt);
     this.updateBall(dt);
@@ -720,9 +727,48 @@ export class Game {
     }
   }
 
-  /** a defender is taken out of the play only while a block still holds */
+  /** a defender is out of the play while his block holds (and he hasn't shed) */
   private neutralized(p: Player) {
-    return p.blocked && p.engaged < SHED_TIME;
+    return p.blocked && !p.shed && p.stun <= 0;
+  }
+
+  /** composite the block matchup into a single attacker(defender)/defender(blocker)
+   * pair for the contest kernel. The rusher picks his best move vs the blocker. */
+  private blockMatchup(blocker: Player, def: Player, pass: boolean) {
+    if (pass) {
+      const fin = rate(def.rat, "FMV") - rate(blocker.rat, "PBF");
+      const pow = Math.max(rate(def.rat, "PWR"), rate(def.rat, "PMV")) - rate(blocker.rat, "PBP");
+      return fin >= pow
+        ? { atk: rate(def.rat, "FMV"), dfn: rate(blocker.rat, "PBF") }
+        : { atk: Math.max(rate(def.rat, "PWR"), rate(def.rat, "PMV")), dfn: rate(blocker.rat, "PBP") };
+    }
+    // run: defender sheds with BSH/STR vs the blocker's run-block
+    return {
+      atk: Math.max(rate(def.rat, "BSH"), rate(def.rat, "STR") - 4),
+      dfn: Math.max(rate(blocker.rat, "RBK"), rate(blocker.rat, "IBL")),
+    };
+  }
+
+  /** resolve one blocker-vs-defender engagement through the shared kernel:
+   * organic win/loss/stalemate plus pancake (defender knocked down) and blow-by. */
+  private resolveBlock(blocker: Player, def: Player, pass: boolean, dbl: boolean, dt: number) {
+    def.blocked = true;
+    if (def.shed || def.stun > 0) return;
+    const { atk, dfn } = this.blockMatchup(blocker, def, pass);
+    const res = contest({
+      atk,
+      def: dfn,
+      kind: pass ? "block" : "shed",
+      perFrame: dt,
+      firstContact: def.engaged < 0.05,
+      momentum: dbl ? -16 : 0, // double team: much harder for the defender to win
+    });
+    if (res.extreme) {
+      if (res.delta > 0) def.shed = true; // defender super-win -> clean beat / blow-by
+      else def.stun = 0.55 + 0.65 * res.sev; // PANCAKE: blocker buries him
+      return;
+    }
+    if (res.win) def.shed = true; // beat his block this rep
   }
 
   private clampPositions() {
@@ -827,9 +873,9 @@ export class Game {
     // get onto the goal side of the defender (between them and the end zone)
     const aimX = tgt.x + dir * 0.8 * YARD;
     this.moveToward(p, aimX, tgt.y, dt, 1);
-    if (dist(p.x, p.y, tgt.x, tgt.y) < BLOCK_R) {
-      tgt.blocked = true;
-      tgt.x -= dir * 0.35; // shove back toward their own side
+    if (dist(p.x, p.y, tgt.x, tgt.y) < BLOCK_R * 1.4) {
+      this.resolveBlock(p, tgt, false, false, dt); // open-field block, kernel-decided
+      if (this.neutralized(tgt)) tgt.x -= dir * 0.4; // sustain: shove off the path
     }
   }
 
@@ -1105,7 +1151,7 @@ export class Game {
   }
 
   // ---- blocking ----------------------------------------------------------
-  private updateBlocking() {
+  private updateBlocking(dt: number) {
     const offTeam = this.possession;
     const carrier = this.carrier();
     const dir = this.offDir();
@@ -1119,22 +1165,23 @@ export class Game {
         dir * (carrier.x - this.los) < 1 * YARD);
 
     if (pocket || !carrier) {
-      this.passProtect(blockers, carrier);
+      this.passProtect(blockers, carrier, dt);
     } else if (this.offPlay.kind === "run") {
-      this.runBlock(blockers, carrier);
+      this.runBlock(blockers, carrier, dt);
     } else {
       // scramble / after the catch — wall off pursuit
-      for (const ol of blockers) this.downfieldBlock(ol, carrier, 0);
+      for (const ol of blockers) this.downfieldBlock(ol, carrier, dt);
     }
   }
 
-  /** assign each blocker to a rusher, inside-out; engaged rushers are sealed off */
-  private passProtect(blockers: Player[], carrier: Player | null) {
+  /** assign each blocker to a rusher inside-out; spares double the top threat */
+  private passProtect(blockers: Player[], carrier: Player | null, dt: number) {
     const protect = carrier ?? { x: this.los, y: WORLD_H / 2 };
     const rush = this.players
       .filter((p) => this.rushers.has(p.id))
       .sort((a, b) => dist(a.x, a.y, protect.x, protect.y) - dist(b.x, b.y, protect.x, protect.y));
     const avail = blockers.slice();
+    const assigns: [Player, Player][] = [];
     for (const r of rush) {
       if (!avail.length) break; // outnumbered — this rusher comes free
       let bi = 0;
@@ -1146,35 +1193,38 @@ export class Game {
           bi = i;
         }
       }
-      this.engageBlock(avail.splice(bi, 1)[0], r, protect);
+      assigns.push([avail.splice(bi, 1)[0], r]);
     }
-    // spare blockers double the most dangerous rusher
     for (const ol of avail) {
-      if (rush.length) this.engageBlock(ol, rush[0], protect);
+      if (rush.length) assigns.push([ol, rush[0]]);
       else {
         ol.dvx = 0;
         ol.dvy = 0;
       }
     }
+    const cnt: Record<string, number> = {};
+    for (const [, r] of assigns) cnt[r.id] = (cnt[r.id] ?? 0) + 1;
+    for (const [ol, r] of assigns) this.engageBlock(ol, r, protect, cnt[r.id] >= 2, dt);
   }
 
-  /** a blocker mirrors a rusher, staying between him and the protect point */
-  private engageBlock(ol: Player, r: Player, protect: { x: number; y: number }) {
+  /** a blocker mirrors a rusher; the kernel decides win/loss/pancake/blow-by */
+  private engageBlock(ol: Player, r: Player, protect: { x: number; y: number }, dbl: boolean, dt: number) {
     const dx = protect.x - r.x;
     const dy = protect.y - r.y;
     const d = Math.hypot(dx, dy) || 1;
-    // stand a step toward the QB from the rusher
     this.moveTowardRaw(ol, r.x + (dx / d) * BLOCK_R * 0.7, r.y + (dy / d) * BLOCK_R * 0.7, 1);
-    if (dist(ol.x, ol.y, r.x, r.y) < BLOCK_R * 1.5) {
-      r.blocked = true;
-      // shove the rusher away from the protect point so he can't cross the blocker
-      r.x -= (dx / d) * 0.35;
-      r.y -= (dy / d) * 0.35;
+    if (dist(ol.x, ol.y, r.x, r.y) < BLOCK_R * 1.6) {
+      this.resolveBlock(ol, r, true, dbl, dt);
+      if (this.neutralized(r)) {
+        // block holding: wall the rusher off / drive him back from the QB
+        r.x -= (dx / d) * 0.5;
+        r.y -= (dy / d) * 0.5;
+      }
     }
   }
 
   /** run blocking: seal the front away from the hole; FB + puller lead through it */
-  private runBlock(blockers: Player[], carrier: Player) {
+  private runBlock(blockers: Player[], carrier: Player, dt: number) {
     const dir = this.offDir();
     const hole = this.offPlay.hole ?? 0;
     const holeY = clamp(WORLD_H / 2 + hole * YARD, SIDELINE, WORLD_H - SIDELINE);
@@ -1183,8 +1233,8 @@ export class Game {
     );
     const claimed = new Set<string>();
     const pull = this.offPlay.pull;
+    const assigns: [Player, Player][] = [];
 
-    // leads: the fullback and (if any) the pulling guard attack the hole's 2nd level
     const leads = blockers.filter(
       (ol) => ol.id.endsWith("_F") || (pull && ol.id.endsWith("_" + pull))
     );
@@ -1192,7 +1242,6 @@ export class Game {
 
     const leadPt = { x: this.los + dir * 4 * YARD, y: holeY };
     for (const ol of leads) {
-      // block the nearest unclaimed defender near/through the hole
       let tgt: Player | null = null;
       let bd = 6 * YARD;
       for (const f of front) {
@@ -1205,7 +1254,7 @@ export class Game {
       }
       if (tgt) {
         claimed.add(tgt.id);
-        this.driveBlock(ol, tgt, dir, holeY);
+        assigns.push([ol, tgt]);
       } else {
         this.moveTowardRaw(ol, this.los + dir * 6 * YARD, holeY, 1);
       }
@@ -1228,19 +1277,24 @@ export class Game {
         }
       }
       claimed.add(f.id);
-      this.driveBlock(avail.splice(bi, 1)[0], f, dir, holeY);
+      assigns.push([avail.splice(bi, 1)[0], f]);
     }
-    // leftover blockers climb toward the hole's second level
     for (const ol of avail) this.moveTowardRaw(ol, this.los + dir * 3 * YARD, holeY, 0.8);
+
+    const cnt: Record<string, number> = {};
+    for (const [, f] of assigns) cnt[f.id] = (cnt[f.id] ?? 0) + 1;
+    for (const [ol, f] of assigns) this.driveBlock(ol, f, dir, holeY, cnt[f.id] >= 2, dt);
   }
 
-  /** drive a defender downfield and away from the hole to open a lane */
-  private driveBlock(ol: Player, tgt: Player, dir: number, holeY: number) {
+  /** drive a defender off the ball and away from the hole; kernel decides the rep */
+  private driveBlock(ol: Player, tgt: Player, dir: number, holeY: number, dbl: boolean, dt: number) {
     this.moveTowardRaw(ol, tgt.x + dir * 0.4 * YARD, tgt.y, 1);
-    if (dist(ol.x, ol.y, tgt.x, tgt.y) < BLOCK_R * 1.5) {
-      tgt.blocked = true;
-      tgt.x += dir * 0.3; // push back toward their own side
-      tgt.y += Math.sign(tgt.y - holeY || 1) * 0.3; // and away from the hole
+    if (dist(ol.x, ol.y, tgt.x, tgt.y) < BLOCK_R * 1.6) {
+      this.resolveBlock(ol, tgt, false, dbl, dt);
+      if (this.neutralized(tgt)) {
+        tgt.x += dir * 0.45; // drive back toward their own side
+        tgt.y += Math.sign(tgt.y - holeY || 1) * 0.45; // and away from the hole
+      }
     }
   }
 
@@ -1543,7 +1597,7 @@ export class Game {
     // the tackle — this is what makes blocks matter and lanes/pockets hold)
     for (const p of this.players) {
       if (p.team === c.team) continue;
-      if (this.neutralized(p)) continue;
+      if (this.neutralized(p) || p.stun > 0) continue; // engaged or knocked down
       if (dist(p.x, p.y, c.x, c.y) < TACKLE_R) {
         // small break-tackle chance when the user is sprinting
         if (
@@ -2023,6 +2077,7 @@ function basePlayer(id: string, team: Team, f: FormSpot): Player {
     stun: 0,
     blocked: false,
     engaged: 0,
+    shed: false,
   };
 }
 
