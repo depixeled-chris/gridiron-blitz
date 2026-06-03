@@ -9,8 +9,11 @@ function fmtClock(s: number) {
 export function Scoreboard({ hud }: { hud: HudState }) {
   const downText =
     hud.toGo <= 0 ? "GOAL" : `${ord(hud.down)} & ${hud.toGo}`;
+  // pull the scoreboard up out of the way once the ball is snapped; it slides
+  // back between plays (presnap / dead / playcall) so it doesn't cover the field
+  const pulled = hud.phase === "live";
   return (
-    <div className="scoreboard">
+    <div className={`scoreboard ${pulled ? "pulled" : ""}`}>
       <div className={`team home ${hud.possession === "home" ? "has-ball" : ""}`}>
         <span className="abbr">YOU</span>
         <span className="pts">{hud.home}</span>
