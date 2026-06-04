@@ -1846,9 +1846,21 @@ export class Game {
     // auto-runs to the spot, so a correctly-led ball arrives in stride; a harder
     // throw (more power) gets there quicker (tighter window), a softer one gives
     // the DB time to close. Then QB-accuracy scatter, depth-scaled, kept inbounds.
+    // lead in the receiver's ROUTE direction (toward his next waypoint), NOT his
+    // instantaneous velocity — mid-cut the velocity points the wrong way and the
+    // ball lands off-target (man slants died this way). Fall back to velocity if
+    // the route is exhausted (scramble drill / catch-and-run).
+    const wp = r.route && r.routeIdx < r.route.length ? r.route[r.routeIdx] : null;
+    let hx = r.vx, hy = r.vy;
+    if (wp) {
+      const wd = dist(r.x, r.y, wp.x, wp.y) || 1;
+      const rsp = Math.hypot(r.vx, r.vy);
+      hx = ((wp.x - r.x) / wd) * rsp;
+      hy = ((wp.y - r.y) / wd) * rsp;
+    }
     let ft = dist(qb.x, qb.y, r.x, r.y) / speed;
     for (let it = 0; it < 2; it++) {
-      ft = dist(qb.x, qb.y, r.x + r.vx * ft, r.y + r.vy * ft) / speed;
+      ft = dist(qb.x, qb.y, r.x + hx * ft, r.y + hy * ft) / speed;
     }
     const distYd = dist(qb.x, qb.y, r.x, r.y) / YARD;
     const accKey = distYd < 20 ? "ACS" : distYd < 40 ? "ACM" : "ACD";
@@ -1859,8 +1871,8 @@ export class Game {
     // lead ~82% of the flight (not the full amount) so a trailing DB stays close
     // enough to CONTEST at the catch — a full lead let every receiver run away open.
     const lf = 0.82;
-    let landX = r.x + r.vx * ft * lf + (rng() - 0.5) * 2 * scatter;
-    let landY = r.y + r.vy * ft * lf + (rng() - 0.5) * 2 * scatter;
+    let landX = r.x + hx * ft * lf + (rng() - 0.5) * 2 * scatter;
+    let landY = r.y + hy * ft * lf + (rng() - 0.5) * 2 * scatter;
     landX = clamp(landX, LEFT_GOAL - 20, RIGHT_GOAL + 20);
     landY = clamp(landY, SIDELINE + 1.5 * YARD, WORLD_H - SIDELINE - 1.5 * YARD);
 
