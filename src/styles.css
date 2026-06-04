@@ -333,6 +333,12 @@ body {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: clamp(6px, 1.6vh, 12px);
   width: min(560px, 94vw);
+  /* fill the available height: the rows grow to use the screen instead of a short
+     grid floating with empty space below it */
+  flex: 1 1 auto;
+  align-content: stretch;
+  grid-auto-rows: minmax(78px, 1fr);
+  max-height: 78vh;
 }
 .pc-card {
   position: relative;
@@ -373,7 +379,10 @@ body {
 }
 .pc-art {
   width: 100%;
-  height: min(78px, 15vh);
+  /* grow with the card (which now fills the grid) instead of a fixed cap */
+  flex: 1 1 auto;
+  min-height: 56px;
+  max-height: 26vh;
   background: #0c1426;
   border-radius: 6px;
 }
