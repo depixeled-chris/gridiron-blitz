@@ -76,13 +76,18 @@ function passCell(label, opts, throwAt, throwKey, N = 100) {
 }
 
 function pass() {
-  console.log("\n=== PASS by DEPTH × MATCHUP (neutral 75v75, throw to A=key 1) ===");
-  console.log("  NFL: short ~73%, intermediate ~52%, deep ~37%; vs prevent easy short/hard deep");
-  passCell("slants(short) v 4-3 cover3", { off: 75, def: 75, defForm: "fourthree", defPlay: "cover3", form: "shotgun", pid: "slants" }, 36, "1");
-  passCell("crossers(mid) v 4-3 cover3", { off: 75, def: 75, defForm: "fourthree", defPlay: "cover3", form: "shotgun", pid: "crossers" }, 60, "1");
-  passCell("fourverts(deep) v 4-3 cover3", { off: 75, def: 75, defForm: "fourthree", defPlay: "cover3", form: "shotgun", pid: "fourverts" }, 90, "1");
-  passCell("fourverts(deep) v PREVENT", { off: 75, def: 75, defForm: "fourthree", defPlay: "prevent", form: "shotgun", pid: "fourverts" }, 90, "1");
-  passCell("slants(short) v PREVENT", { off: 75, def: 75, defForm: "fourthree", defPlay: "prevent", form: "shotgun", pid: "slants" }, 36, "1");
+  console.log("\n=== PASS — man + cover3 × depth × tier (GB-T002 Phase-0 baseline) ===");
+  console.log("  NFL targets: short ~73 / intermediate ~52 / deep ~37; INT ~2.3%; contested ~47%");
+  for (const [cov, covLabel] of [["man", "MAN"], ["cover3", "COVER3"]]) {
+    console.log(`  -- vs ${covLabel} (neutral 75v75) --`);
+    passCell("  slants(short)", { off: 75, def: 75, defForm: "fourthree", defPlay: cov, form: "shotgun", pid: "slants" }, 36, "1");
+    passCell("  crossers(mid)", { off: 75, def: 75, defForm: "fourthree", defPlay: cov, form: "shotgun", pid: "crossers" }, 60, "1");
+    passCell("  fourverts(deep)", { off: 75, def: 75, defForm: "fourthree", defPlay: cov, form: "shotgun", pid: "fourverts" }, 90, "1");
+  }
+  console.log("  -- tier (crossers mid v cover3) --");
+  passCell("  bad off60", { off: 60, def: 75, defForm: "fourthree", defPlay: "cover3", form: "shotgun", pid: "crossers" }, 60, "1");
+  passCell("  elite off90", { off: 90, def: 75, defForm: "fourthree", defPlay: "cover3", form: "shotgun", pid: "crossers" }, 60, "1");
+  passCell("  v elite CB90", { off: 75, def: 90, defForm: "fourthree", defPlay: "cover3", form: "shotgun", pid: "crossers" }, 60, "1");
 }
 
 function kickCell(label, kic, N = 120) {
