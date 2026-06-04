@@ -585,8 +585,10 @@ body {
   position: absolute;
   left: calc(22px + env(safe-area-inset-left));
   bottom: calc(22px + env(safe-area-inset-bottom));
-  width: 150px;
-  height: 150px;
+  /* scale with the screen so it fits small phones (vmin = short side in landscape)
+     but never balloons past the original size on big ones */
+  width: min(150px, 33vmin);
+  height: min(150px, 33vmin);
   border-radius: 50%;
   background: radial-gradient(
     circle,
@@ -599,8 +601,8 @@ body {
   place-items: center;
 }
 .joystick .knob {
-  width: 62px;
-  height: 62px;
+  width: min(62px, 14vmin);
+  height: min(62px, 14vmin);
   border-radius: 50%;
   background: radial-gradient(circle at 35% 30%, #fff, #b9c6e6);
   border: 2px solid rgba(0, 0, 0, 0.35);
@@ -638,28 +640,28 @@ body {
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
 }
 .tbtn.rcv {
-  width: 56px;
-  height: 56px;
-  font-size: 22px;
+  width: min(56px, 13vmin);
+  height: min(56px, 13vmin);
+  font-size: min(22px, 5.2vmin);
   background: linear-gradient(180deg, #8fb8ff, #4f7ddb);
 }
 .tbtn.open {
-  width: 56px;
-  height: 56px;
-  font-size: 13px;
+  width: min(56px, 13vmin);
+  height: min(56px, 13vmin);
+  font-size: min(13px, 3.2vmin);
   background: linear-gradient(180deg, #ffe27a, var(--gold));
   align-self: center;
 }
 .tbtn.big {
-  width: 88px;
-  height: 88px;
-  font-size: 17px;
+  width: min(88px, 20vmin);
+  height: min(88px, 20vmin);
+  font-size: min(17px, 4.2vmin);
   background: linear-gradient(180deg, #ffe27a, var(--gold));
 }
 .tbtn.turbo {
-  width: 96px;
-  height: 96px;
-  font-size: 17px;
+  width: min(96px, 21vmin);
+  height: min(96px, 21vmin);
+  font-size: min(17px, 4.2vmin);
   background: linear-gradient(180deg, #ff8a5c, #e2562f);
   color: #fff;
 }

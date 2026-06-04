@@ -188,11 +188,16 @@ export class Game {
   private layout() {
     this.viewW = this.app.screen.width;
     this.viewH = this.app.screen.height;
-    // fit the full field height to the screen, then scroll horizontally
-    this.worldScale = clamp(this.viewH / WORLD_H, 0.5, 1.6);
+    // Fit the full field HEIGHT to the screen, then scroll horizontally (the field
+    // is 5:1, always wider than any screen, so the camera scrolls and never shows
+    // a side gap). Scale to EXACTLY fill viewH on any aspect ratio — no upper clamp.
+    // The old clamp(., 0.5, 1.6) capped the zoom at 1.6, so any viewport taller than
+    // 1.6*WORLD_H (~845px: every desktop, some phones) letterboxed top+bottom — the
+    // "white space". A floor (0.5) only guards absurdly short viewports (<264px).
+    this.worldScale = Math.max(this.viewH / WORLD_H, 0.5);
     this.world.scale.set(this.worldScale);
     const span = WORLD_H * this.worldScale;
-    this.world.y = Math.max(0, (this.viewH - span) / 2);
+    this.world.y = Math.max(0, (this.viewH - span) / 2); // 0 when filling
   }
 
   destroy() {
