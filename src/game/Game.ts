@@ -4,7 +4,6 @@ import {
   CATCH_AREA,
   CATCH_R,
   COLORS,
-  DEFLECT_R,
   ENDZONE,
   FIELD_YARDS,
   KICK_SPEED,
@@ -1241,9 +1240,10 @@ export class Game {
     const dfn = (rate(db.rat, "MCV") + rate(db.rat, "AGI")) / 2;
     const res = contest({ atk, def: dfn, kind: "cut", firstContact: true, leverage: lev });
     if (res.win) {
-      wr.burst = 0.35 + 0.25 * res.sev;
-      // open by ~1.5-3.5yd underneath, less deep; an extreme win (double move) more.
-      const open = (zone ? 1.9 : 1.6) + 2.0 * res.sev - clamp((depth - 10) * 0.05, 0, 1.2);
+      wr.burst = 0.3 + 0.2 * res.sev;
+      // most wins open ~0.8-1.4yd (contested-catchable); a big win (double move)
+      // opens 2yd+ (clean). Deeper routes separate less (DB has time to react).
+      const open = (zone ? 0.9 : 0.7) + 1.3 * res.sev - clamp((depth - 8) * 0.07, 0, 1.6);
       db.cushion = Math.max(db.cushion, open);
       if (res.extreme) db.stun = 0.3 + 0.45 * res.sev;
     } else {
@@ -1831,30 +1831,38 @@ export class Game {
     return best;
   }
 
-  private throwTo(receiverId: string) {
+  /** throw to a receiver. `power` (0.6 lob .. 1.3 bullet) scales ball speed — the
+   *  user-variance lever (tap/hold for the human; the CPU picks ~ideal). */
+  private throwTo(receiverId: string, power = 1) {
     const qb = this.carrier();
     if (!qb) return;
     const r = this.byId(receiverId);
     if (!r) return;
     const b = this.ball;
 
-    // Lead the receiver, but only a CATCHABLE amount: the receiver also runs to
-    // the ball, so over-leading by the full flight time just throws it past him
-    // (often out of bounds). Cap the lead time, add QB-accuracy scatter, and
-    // keep the spot inbounds with a sideline buffer.
-    const dir = this.offDir();
+    const speed = PASS_SPEED * clamp(power, 0.6, 1.4);
+    // PROPER LEAD: throw to where the receiver WILL BE when the ball arrives (the
+    // full flight time, iterated once for the circular dependence). The receiver
+    // auto-runs to the spot, so a correctly-led ball arrives in stride; a harder
+    // throw (more power) gets there quicker (tighter window), a softer one gives
+    // the DB time to close. Then QB-accuracy scatter, depth-scaled, kept inbounds.
+    let ft = dist(qb.x, qb.y, r.x, r.y) / speed;
+    for (let it = 0; it < 2; it++) {
+      ft = dist(qb.x, qb.y, r.x + r.vx * ft, r.y + r.vy * ft) / speed;
+    }
     const distYd = dist(qb.x, qb.y, r.x, r.y) / YARD;
-    const ft = (distYd * YARD) / PASS_SPEED;
-    const lead = Math.min(ft, 0.4); // modest lead — the receiver also tracks the ball
     const accKey = distYd < 20 ? "ACS" : distYd < 40 ? "ACM" : "ACD";
     const acc = rate(qb.rat, accKey);
     const onRun = Math.hypot(qb.vx, qb.vy) > 0.4 * qb.vmax ? 0.4 : 0; // throwing on the move
-    const scatter = (1 - acc / 99 + onRun) * 2.0 * YARD;
-    let landX = r.x + r.vx * lead + (rng() - 0.5) * 2 * scatter;
-    let landY = r.y + r.vy * lead + (rng() - 0.5) * 2 * scatter;
+    // deeper throws scatter more (harder to be accurate downfield)
+    const scatter = (1 - acc / 99 + onRun) * (1.4 + distYd * 0.04) * YARD;
+    // lead ~82% of the flight (not the full amount) so a trailing DB stays close
+    // enough to CONTEST at the catch — a full lead let every receiver run away open.
+    const lf = 0.82;
+    let landX = r.x + r.vx * ft * lf + (rng() - 0.5) * 2 * scatter;
+    let landY = r.y + r.vy * ft * lf + (rng() - 0.5) * 2 * scatter;
     landX = clamp(landX, LEFT_GOAL - 20, RIGHT_GOAL + 20);
     landY = clamp(landY, SIDELINE + 1.5 * YARD, WORLD_H - SIDELINE - 1.5 * YARD);
-    void dir;
 
     qb.hasBall = false;
     b.carrier = null;
@@ -1872,9 +1880,10 @@ export class Game {
     b.tip = false;
     b.swatDone = false;
     const throwDist = dist(qb.x, qb.y, landX, landY);
-    b.ftime = Math.max(0.32, throwDist / PASS_SPEED);
-    // every throw arcs enough to clear underneath defenders; long balls higher
-    b.peak = clamp(throwDist * 0.1, 1.0 * YARD, 2.4 * YARD); // flatter -> catchable longer near the landing
+    b.ftime = Math.max(0.32, throwDist / speed);
+    // every throw arcs enough to clear underneath defenders; long balls higher.
+    // a softer throw (lob) arcs higher, a bullet flatter.
+    b.peak = clamp(throwDist * 0.1 * (2 - clamp(power, 0.6, 1.4)), 1.0 * YARD, 2.6 * YARD);
     // the targeted receiver auto-runs to the ball and makes the catch; control
     // hands to him only AFTER he catches it (completePass), so the pass plays
     // out the same whether the QB is the human or the CPU.
@@ -1979,12 +1988,11 @@ export class Game {
       return;
     }
 
-    // ---- MID FLIGHT but still low (a flat throw): only a defender directly
-    //      under it, clearly ahead of the receiver, can undercut it ----
-    if (nd && ndDist <= DEFLECT_R && (!rec || ndDist < rd - LEAD_MARGIN)) {
-      return this.resolveDefenderBall(nd, target, ndDist);
-    }
-    if (rec && rd <= CATCH_R) return this.resolveCatch(rec, contestDef, ndDist);
+    // ---- MID FLIGHT: the ball arcs OVER the underneath defenders — it is not
+    //      playable here. A defender beats the throw only at the LANDING (he was
+    //      in position / undercut the route) or at the RELEASE (a hand at the
+    //      line). This is what lets a properly-led ball get to an open receiver
+    //      instead of being broken up in flight (GB-D005: real ball, real arc). ----
   }
 
   /** a defender under the low release gets one swing at the ball; most of the
@@ -2012,8 +2020,10 @@ export class Game {
       def: dfn,
       kind: "catch",
       firstContact: true,
-      // it's HIS ball — he's tracking it and boxing out (+14); separation helps more
-      leverage: 14 + (sep - 0.7) * 14,
+      // a TRULY contested catch (defender at the ball, sep~0.8) is ~even — NFL
+      // contested-catch rate ~47%. Small bias (+3) for tracking/boxing out;
+      // separation tilts it (and >1.6yd is the auto-catch path above).
+      leverage: 3 + (sep - 0.8) * 16,
     });
     if (res.win) return this.completePass(rec);
     // a contested LOSS is almost always a pass break-up; a pick only when the
