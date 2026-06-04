@@ -687,7 +687,9 @@ export class Game {
             };
           });
       };
-      spread(deep, deepFwd, 18); // deep zones use most of the width
+      // deep safeties sit over the hashes (not the sidelines) so they actually
+      // bracket the deep HALVES — a wide spread left the deep middle wide open.
+      spread(deep, deepFwd, play.coverage === "cover2" ? 11 : 16);
       spread(under, 6.5, 20); // underneath flats/hooks slightly wider
     }
 
@@ -1376,14 +1378,19 @@ export class Game {
         continue;
       }
       if (ballCarried) {
-        // a defender actively engaged by a blocker is CONTROLLED by that block
-        // (driveBlock/engageBlock position him) — he can't also run his own
-        // pursuit, or he'd drift into the backfield through the block. Zero his
-        // intent and let the block move him.
-        if (this.neutralized(p)) {
+        // a defender engaged by a block is controlled by it (no own pursuit, or
+        // he'd drift through the block into the backfield) — BUT ONLY while the
+        // carrier is still in front of him. Once the back breaks PAST him the rep
+        // is over: he sheds off and gives chase (otherwise blocked front-7 freeze
+        // and the carrier runs free to the safety-net — runs too easy / plays drag).
+        const carrierPast = dir * (carrier!.x - p.x) > 1 * YARD;
+        if (this.neutralized(p) && !carrierPast) {
           p.dvx = 0;
           p.dvy = 0;
           continue;
+        }
+        if (this.neutralized(p) && carrierPast) {
+          p.shed = true; // the back beat him; release the block and pursue
         }
         // on a run, runFit governs the whole front+secondary (gap discipline for
         // the box, CONTAIN for the DBs) until the back clears the front seven —
@@ -1980,8 +1987,12 @@ export class Game {
     // backstop, but at t=1 the ground position IS the landing, so toLand<LAND_ZONE
     // already covers it.
     if (toLand < LAND_ZONE || b.t >= 1) {
-      // the receiver gets his ball unless a defender is clearly closer to it
-      if (rec && rd <= CATCH_AREA && (!nd || rd <= ndDist + LEAD_MARGIN)) {
+      // the targeted receiver EXTENDS for his own ball — a generous reach so a
+      // throw led a bit off still gets caught when he's the one making the play
+      // (cut the "incomplete for no reason" on slightly-off-target throws). A
+      // defender still needs to be genuinely AT the ball to break it up / pick it.
+      const REC_REACH = CATCH_R * 2.6;
+      if (rec && rd <= REC_REACH && (!nd || rd <= ndDist + LEAD_MARGIN)) {
         return this.resolveCatch(rec, contestDef, ndDist);
       }
       if (nd && ndDist <= CATCH_AREA) {
@@ -2040,10 +2051,11 @@ export class Game {
       const drop = clamp((90 - atk) / 320, 0.01, 0.11);
       return rng() < drop ? this.incomplete() : this.completePass(rec);
     }
-    // a loss is a break-up; a pick only when the DB decisively won (extreme), a
-    // tipped ball now and then. INTs scale with how covered the throw was.
-    if (nd && res.extreme && sep < 1.0) return this.interception(nd);
-    return nd && rng() < 0.12 ? this.startTip(nd) : this.incomplete();
+    // a loss is almost always a break-up; a pick only when the DB decisively won
+    // (extreme) AND was right at the ball — kept rare (NFL INT ~2.3%/att; the
+    // generous receiver-reach was over-producing picks at ~6-7%).
+    if (nd && res.extreme && sep < 0.7 && rng() < 0.5) return this.interception(nd);
+    return nd && rng() < 0.1 ? this.startTip(nd) : this.incomplete();
   }
 
   /** a defender truly undercut the route (no receiver at the ball) */
