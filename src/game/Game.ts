@@ -950,6 +950,9 @@ export class Game {
   }
 
   private stepLive(dt: number) {
+    // overall game-speed scalar — the live action plays a touch slower so it's
+    // readable (players, ball, and timers all scale together). Tune to taste.
+    dt *= 0.82;
     // clock
     this.clock -= dt;
     if (this.clock <= 0) {
