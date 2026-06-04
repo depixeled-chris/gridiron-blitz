@@ -2005,31 +2005,30 @@ export class Game {
     return this.batDown(); // 12% knocked down (incomplete)
   }
 
-  /** the intended receiver is at the ball: open => catch (rare drop); contested
-   * => a ratings contest (more separation favours the WR) for catch / PBU / INT */
+  /** the intended receiver is at the ball: completion is a SMOOTH function of his
+   * separation + ratings (no hard open/contested cliff — that made it bimodal).
+   * Wide open ≈ 92% (minus drops), even contest (~0.8yd) ≈ 50%, blanketed ≈ low. */
   private resolveCatch(rec: Player, nd: Player | null, ndDist: number) {
     const sep = (nd ? ndDist : 99) / YARD;
-    if (!nd || sep > 1.6) {
-      const drop = clamp((88 - rate(rec.rat, "CTH")) / 350, 0.01, 0.12);
-      return rng() < drop ? this.incomplete() : this.completePass(rec);
-    }
     const atk = (rate(rec.rat, "CTH") + rate(rec.rat, "CIT") + rate(rec.rat, "SPC")) / 3;
-    const dfn = (rate(nd.rat, "INT") + rate(nd.rat, "JMP") + rate(nd.rat, "MCV")) / 3;
+    const dfn = nd ? (rate(nd.rat, "INT") + rate(nd.rat, "JMP") + rate(nd.rat, "MCV")) / 3 : 40;
+    // separation is the dominant term (≈50% at ~0.8yd, ramping each way); ratings
+    // are a secondary tilt. firstContact lets a wide-open or blanketed ball spike.
     const res = contest({
       atk,
       def: dfn,
       kind: "catch",
       firstContact: true,
-      // a TRULY contested catch (defender at the ball, sep~0.8) is ~even — NFL
-      // contested-catch rate ~47%. Small bias (+3) for tracking/boxing out;
-      // separation tilts it (and >1.6yd is the auto-catch path above).
-      leverage: 3 + (sep - 0.8) * 16,
+      leverage: (sep - 0.8) * 13,
     });
-    if (res.win) return this.completePass(rec);
-    // a contested LOSS is almost always a pass break-up; a pick only when the
-    // defender decisively won the jump ball, a tipped ball now and then.
-    if (res.extreme) return this.interception(nd);
-    return rng() < 0.12 ? this.startTip(nd) : this.batDown();
+    if (res.win) {
+      const drop = clamp((90 - atk) / 320, 0.01, 0.11);
+      return rng() < drop ? this.incomplete() : this.completePass(rec);
+    }
+    // a loss is a break-up; a pick only when the DB decisively won (extreme), a
+    // tipped ball now and then. INTs scale with how covered the throw was.
+    if (nd && res.extreme && sep < 1.0) return this.interception(nd);
+    return nd && rng() < 0.12 ? this.startTip(nd) : this.incomplete();
   }
 
   /** a defender truly undercut the route (no receiver at the ball) */
