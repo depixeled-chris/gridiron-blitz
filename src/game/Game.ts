@@ -1868,8 +1868,11 @@ export class Game {
     const onRun = Math.hypot(qb.vx, qb.vy) > 0.4 * qb.vmax ? 0.4 : 0; // throwing on the move
     // deeper throws scatter more (harder to be accurate downfield)
     const scatter = (1 - acc / 99 + onRun) * (1.4 + distYd * 0.04) * YARD;
-    // lead ~82% of the flight (not the full amount) so a trailing DB stays close
-    // enough to CONTEST at the catch — a full lead let every receiver run away open.
+    // lead ~82% of the flight — enough to lead a deep receiver in stride while
+    // keeping a trailing DB close enough to contest. (Lower underthrows the deep
+    // ball; a full lead lets everyone run open.) A residual: laterally-breaking
+    // routes in TIGHT coverage (man slants, cover2 crossers) still land a bit off
+    // — a focused sub-fix, forgiven by looser zones.
     const lf = 0.82;
     let landX = r.x + hx * ft * lf + (rng() - 0.5) * 2 * scatter;
     let landY = r.y + hy * ft * lf + (rng() - 0.5) * 2 * scatter;
