@@ -1225,18 +1225,30 @@ export class Game {
     return man ?? near;
   }
 
-  /** WR vs his man at a route break — the kernel decides who wins the separation */
+  /** WR vs coverage at a route break — the kernel decides the SEPARATION (GB-D005
+   *  Stage A). A won break opens a PERSISTENT trailing cushion on the defender
+   *  (his openness), recovered slowly. Depth-scaled: it's harder to separate deep,
+   *  easier underneath; zone gives more underneath cushion (soft spots). */
   private routeBreak(wr: Player) {
     const db = this.coveringDefender(wr);
     if (!db || dist(db.x, db.y, wr.x, wr.y) > 4 * YARD) return; // uncovered: no contest
+    const depth = Math.abs(this.offDir() * (wr.x - this.los)) / YARD;
+    const zone = (db.job ?? "man") === "zone";
+    // deeper routes separate less (the DB has more cushion to react); zone underneath
+    // gives the WR a soft window. leverage favours the WR less as depth grows.
+    const lev = (zone ? 4 : 0) - clamp((depth - 8) * 0.6, -3, 9);
     const atk = (rate(wr.rat, "RRM") + rate(wr.rat, "RRS") + rate(wr.rat, "AGI")) / 3;
     const dfn = (rate(db.rat, "MCV") + rate(db.rat, "AGI")) / 2;
-    const res = contest({ atk, def: dfn, kind: "cut", firstContact: true });
+    const res = contest({ atk, def: dfn, kind: "cut", firstContact: true, leverage: lev });
     if (res.win) {
-      wr.burst = 0.45 + 0.4 * res.sev; // gets a step on the break
-      if (res.extreme) db.stun = 0.3 + 0.45 * res.sev; // double-move: DB falls
+      wr.burst = 0.35 + 0.25 * res.sev;
+      // open by ~1.5-3.5yd underneath, less deep; an extreme win (double move) more.
+      const open = (zone ? 1.9 : 1.6) + 2.0 * res.sev - clamp((depth - 10) * 0.05, 0, 1.2);
+      db.cushion = Math.max(db.cushion, open);
+      if (res.extreme) db.stun = 0.3 + 0.45 * res.sev;
     } else {
-      db.burst = 0.35; // DB jumps the break and stays in phase
+      db.burst = 0.3; // DB stays in phase / jumps the break
+      db.cushion = Math.min(db.cushion, 0.4); // blanketed
     }
   }
 
@@ -1493,7 +1505,19 @@ export class Game {
     // can still close and contest at the catch (jump-ball) and undercut inbreakers.
     const dir = this.offDir();
     const aim = this.intercept(p, cover);
-    this.moveToward(p, aim.x - dir * 0.6 * YARD, aim.y, dt, 0.99);
+    // trail the man by the cushion he gave up on the break (GB-D005 Stage A),
+    // recovered slowly (~0.5yd/s) so a beaten DB STAYS beaten through the catch
+    // rather than being re-glued by perfect pursuit. Cushion is along the WR's path.
+    p.cushion = Math.max(0, p.cushion - 0.5 * dt);
+    const sp = Math.hypot(cover.vx, cover.vy) || 1;
+    const cush = p.cushion * YARD;
+    this.moveToward(
+      p,
+      aim.x - (cover.vx / sp) * cush - dir * 0.6 * YARD,
+      aim.y - (cover.vy / sp) * cush,
+      dt,
+      0.99
+    );
   }
 
   private coverZone(p: Player, dt: number) {
@@ -1514,7 +1538,12 @@ export class Game {
     }
     if (tgt) {
       const aim = this.intercept(p, tgt);
-      this.moveToward(p, aim.x, aim.y, dt, 0.95);
+      // same cushion trail as man: a zone defender beaten across his face stays a
+      // step behind (the soft window), recovered slowly.
+      p.cushion = Math.max(0, p.cushion - 0.5 * dt);
+      const sp = Math.hypot(tgt.vx, tgt.vy) || 1;
+      const cush = p.cushion * YARD;
+      this.moveToward(p, aim.x - (tgt.vx / sp) * cush, aim.y - (tgt.vy / sp) * cush, dt, 0.95);
     } else {
       this.moveToward(p, lm.x, lm.y, dt, 0.85);
     }
@@ -2729,6 +2758,7 @@ function basePlayer(id: string, team: Team, f: FormSpot): Player {
     shed: false,
     burst: 0,
     sep: 0,
+    cushion: 0,
   };
 }
 

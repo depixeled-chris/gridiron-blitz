@@ -143,6 +143,10 @@ export interface Player {
   burst: number;
   /** separation in yards to the nearest opponent (receivers; for the catch model) */
   sep: number;
+  /** coverage cushion (yds): a DEFENDER's earned trail distance behind his man,
+   *  set when the WR wins a route break and recovered slowly. Drives both the
+   *  defender's position and the receiver's openness for the catch (GB-D005). */
+  cushion: number;
 }
 
 export interface BallState {
