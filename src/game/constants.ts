@@ -20,7 +20,8 @@ export const TACKLE_R = 0.95 * YARD;
 export const CATCH_R = 1.3 * YARD;
 export const BLOCK_R = 1.1 * YARD;
 
-export const TURBO = 1.28;
+export const TURBO = 1.13; // only the user's carrier gets it; 1.28 made him
+// uncatchable vs 1.0x AI pursuit (housecalls / turbo blow-by). A real boost, not a cheat.
 export const SHED_TIME = 1.3; // seconds a block holds before the defender sheds
 
 // speeds, yards/sec
