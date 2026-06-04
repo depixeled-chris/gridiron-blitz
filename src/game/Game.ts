@@ -84,6 +84,7 @@ interface Sprite {
   ring: Graphics;
   num: Text;
   label: Text;
+  labelBg: Graphics;
 }
 
 export class Game {
@@ -92,6 +93,7 @@ export class Game {
   private fieldGfx = new Graphics();
   private overlay = new Graphics();
   private ballGfx = new Graphics();
+  private meterGfx = new Graphics(); // screen-space kick meter overlay
   private sprites = new Map<string, Sprite>();
 
   private players: Player[] = [];
@@ -118,6 +120,16 @@ export class Game {
   private defPlay: DefensePlay = DEFENSE_FORMATIONS[0].plays[0];
   private kickMode: "fg" | "punt" | "pat" | null = null;
   private kickGood = false;
+  // interactive kick meter (only when the human kicks; AI/headless auto-resolve).
+  // Stage "power": a gauge oscillates 0..1, tap locks leg power. Stage "accuracy":
+  // a marker sweeps a center sweet-spot (its width set by the kicker rating), tap
+  // locks aim. Then the ball launches with that power+aim.
+  private kickStage: "power" | "accuracy" | null = null;
+  private kickMeter = 0; // 0..1 oscillator position
+  private kickMeterDir = 1;
+  private kickPower = 0; // locked at the power tap
+  private kickDist = 0; // FG yardage (for the required-power calc)
+  private kickAccWin = 0.32; // made-window half-width on the -1..1 accuracy axis
   // point-after state: a try is pending after a TD; conversion is the active attempt
   private tryPending = false;
   private tryMode = false;
@@ -169,6 +181,7 @@ export class Game {
     this.world.addChild(this.fieldGfx, this.overlay);
     this.app.stage.addChild(this.world);
     this.world.addChild(this.ballGfx);
+    this.app.stage.addChild(this.meterGfx); // screen-space HUD, on top of the world
     this.drawField();
     this.layout();
     this.input.attach();
@@ -393,6 +406,7 @@ export class Game {
     this.conversion = null;
     this.pendingKickoff = false;
     this.kickMode = null;
+    this.kickStage = null;
     // keep the game from ending mid-sample (the arcade clock would otherwise
     // run out over a long harness run and flip the phase to gameover)
     this.quarter = 1;
@@ -729,6 +743,7 @@ export class Game {
     this.throwTimer = 0;
     this.liveTime = 0;
     this.kickMode = null;
+    this.kickStage = null;
     // fresh matchup state for the new play
     for (const p of this.players) {
       p.shed = false;
@@ -788,12 +803,37 @@ export class Game {
     b.z = 0;
     b.t = 0;
     b.elapsed = 0;
+    b.inAir = false; // held until the kick launches (meter complete, or auto)
     this.kickMode = kind;
-    this.audio.kick();
+    this.kickDist = kind === "pat" ? 20 : Math.abs(goalX - b.sx) / YARD + 10;
 
+    // The human kicking on-screen gets the interactive meter. The AI (and the
+    // headless sim) keep the exact RNG path below so the sim stays reproducible.
+    if (this.userOnOffense() && !this.headless) {
+      const kic = this.kickerRating();
+      // a better kicker = a wider made-window (more forgiving aim)
+      this.kickAccWin = clamp(0.3 + (kic - 75) * 0.006, 0.18, 0.55);
+      this.kickStage = "power";
+      this.kickMeter = 0;
+      this.kickMeterDir = 1;
+      this.kickPower = 0;
+      this.message =
+        kind === "punt" ? "TAP: POWER" : kind === "pat" ? "PAT — TAP: POWER" : "TAP: POWER";
+      return;
+    }
+    this.resolveKickAuto(kind, dir, goalX, b);
+  }
+
+  /** AI / headless kick: ratings + RNG, no meter (unchanged distribution). */
+  private resolveKickAuto(
+    kind: "fg" | "punt" | "pat",
+    dir: number,
+    goalX: number,
+    b: typeof this.ball
+  ) {
+    b.inAir = true;
+    this.audio.kick();
     if (kind === "fg" || kind === "pat") {
-      // distance to the posts (back of end zone = +10 from goal line); a PAT is
-      // a fixed short kick, always inside range.
       const yds = kind === "pat" ? 20 : Math.abs(goalX - b.sx) / YARD + 10;
       this.kickGood = yds <= 65 && rng() < this.fgProb(yds);
       b.tx = goalX + dir * (this.kickGood ? 14 * YARD : 2 * YARD);
@@ -802,13 +842,77 @@ export class Game {
       b.ftime = Math.max(0.7, (Math.abs(b.tx - b.sx) / KICK_SPEED) * 1.1);
       this.message = kind === "pat" ? "EXTRA POINT…" : "FIELD GOAL…";
     } else {
-      // punt: gross scales with the punter's leg (league-avg ~75 -> 38-46yd), with
-      // a touchback if it reaches the end zone. A better leg = more gross.
       const puntYds = 38 + (this.kickerRating() - 75) * 0.22 + rng() * 8;
       let landX = b.sx + dir * puntYds * YARD;
       if (dir > 0 ? landX >= goalX : landX <= goalX) landX = goalX; // touchback
       b.tx = landX;
       b.ty = WORLD_H / 2 + (rng() - 0.5) * 6 * YARD;
+      b.peak = 3.6 * YARD;
+      b.ftime = Math.max(0.9, (Math.abs(b.tx - b.sx) / KICK_SPEED) * 1.3);
+      this.message = "PUNT…";
+    }
+  }
+
+  /** advance the kick meter; a tap locks the current stage. */
+  private updateKickMeter(dt: number) {
+    const speed = 1.7;
+    this.kickMeter += this.kickMeterDir * speed * dt;
+    if (this.kickMeter >= 1) {
+      this.kickMeter = 1;
+      this.kickMeterDir = -1;
+    } else if (this.kickMeter <= 0) {
+      this.kickMeter = 0;
+      this.kickMeterDir = 1;
+    }
+    if (!this.input.pressed("Space")) return;
+    if (this.kickStage === "power") {
+      this.kickPower = Math.max(0.08, this.kickMeter);
+      this.kickStage = "accuracy";
+      this.kickMeter = 0;
+      this.kickMeterDir = 1;
+      this.message = "TAP: AIM";
+    } else {
+      const acc = this.kickMeter * 2 - 1; // -1..1, 0 = dead center
+      this.kickStage = null;
+      this.fireKick(this.kickPower, acc);
+    }
+  }
+
+  /** launch the kick from a metered power (0..1) + aim error (-1..1). */
+  private fireKick(power: number, acc: number) {
+    const b = this.ball;
+    const dir = this.offDir();
+    const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
+    const kind = this.kickMode!;
+    b.inAir = true;
+    this.audio.kick();
+    if (kind === "fg" || kind === "pat") {
+      const reqPower = clamp(this.kickDist / 68, 0.12, 1); // a ~68-yarder needs full leg
+      const long = power >= reqPower;
+      const straight = Math.abs(acc) <= this.kickAccWin;
+      this.kickGood = long && straight;
+      if (this.kickGood) {
+        b.tx = goalX + dir * 14 * YARD;
+        b.ty = WORLD_H / 2 + acc * 4 * YARD; // a hair of curve, still through
+      } else if (long) {
+        b.tx = goalX + dir * 4 * YARD; // reached the posts but sailed wide
+        b.ty = WORLD_H / 2 + Math.sign(acc || 1) * 9 * YARD;
+      } else {
+        b.tx = b.sx + dir * power * 70 * YARD; // came up short
+        b.ty = WORLD_H / 2 + acc * 3 * YARD;
+      }
+      b.peak = 3.2 * YARD;
+      b.ftime = Math.max(0.7, (Math.abs(b.tx - b.sx) / KICK_SPEED) * 1.1);
+      this.message = kind === "pat" ? "EXTRA POINT…" : "FIELD GOAL…";
+    } else {
+      const kic = this.kickerRating();
+      const maxGross = 44 + (kic - 75) * 0.3;
+      const timing = 1 - Math.abs(acc) * 0.4; // poor aim shanks it short
+      const puntYds = (28 + power * (maxGross - 28)) * timing;
+      let landX = b.sx + dir * puntYds * YARD;
+      if (dir > 0 ? landX >= goalX : landX <= goalX) landX = goalX; // touchback
+      b.tx = landX;
+      b.ty = clamp(WORLD_H / 2 + acc * 5 * YARD, SIDELINE, WORLD_H - SIDELINE);
       b.peak = 3.6 * YARD;
       b.ftime = Math.max(0.9, (Math.abs(b.tx - b.sx) / KICK_SPEED) * 1.3);
       this.message = "PUNT…";
@@ -848,6 +952,7 @@ export class Game {
     b.z = 0;
     const kind = this.kickMode;
     this.kickMode = null;
+    this.kickStage = null;
     if (kind === "fg") this.resolveFieldGoal();
     else if (kind === "pat") this.resolvePAT();
     else this.resolvePunt();
@@ -928,7 +1033,8 @@ export class Game {
       if (this.userOnOffense() && this.input.pressed("Space")) this.snapTimer = 0;
       if (this.snapTimer <= 0) this.snap();
     } else if (this.phase === "live") {
-      this.stepLive(dt);
+      if (this.kickStage) this.updateKickMeter(dt);
+      else this.stepLive(dt);
     } else if (this.phase === "dead") {
       this.deadTimer -= dt;
       if (this.deadTimer <= 0) this.afterPlay();
@@ -2584,10 +2690,39 @@ export class Game {
         this.ball.carrier?.endsWith("_QB") === true &&
         !!p.target;
       s.label.visible = !!showLabel;
+      s.labelBg.visible = !!showLabel;
       if (showLabel) s.label.text = p.target!;
     }
     // ball
     this.drawBall();
+    this.drawKickMeter();
+  }
+
+  /** screen-space two-stage kick meter (power gauge, then accuracy sweep). */
+  private drawKickMeter() {
+    const g = this.meterGfx;
+    g.clear();
+    if (!this.kickStage) return;
+    const cx = this.viewW / 2;
+    const baseY = this.viewH - 46;
+    const W = Math.min(300, this.viewW * 0.7);
+    const H = 18;
+    const x0 = cx - W / 2;
+    // track
+    g.roundRect(x0 - 6, baseY - 6, W + 12, H + 12, 8).fill({ color: 0x0a0e1a, alpha: 0.8 });
+    g.roundRect(x0, baseY, W, H, 5).fill({ color: 0x1a2440, alpha: 0.95 });
+    if (this.kickStage === "power") {
+      // fill proportional to the oscillating power
+      g.roundRect(x0, baseY, W * this.kickMeter, H, 5).fill({ color: 0x8fb8ff });
+    } else {
+      // accuracy: center sweet-spot band + the moving marker. The made test is
+      // |meter*2-1| <= kickAccWin, i.e. meter within kickAccWin/2 of center (0.5),
+      // so the band spans W*kickAccWin total, centered.
+      const bandHalf = (W * this.kickAccWin) / 2;
+      g.roundRect(cx - bandHalf, baseY, bandHalf * 2, H, 5).fill({ color: 0x2fae62, alpha: 0.9 });
+      const mx = x0 + W * this.kickMeter;
+      g.roundRect(mx - 3, baseY - 5, 6, H + 10, 3).fill({ color: 0xffe600 });
+    }
   }
 
   private drawBall() {
@@ -2642,6 +2777,7 @@ export class Game {
         this.offPlay.kind === "pass" &&
         this.ball.carrier?.endsWith("_QB") === true,
       canSwitch: this.phase === "live" && !this.userOnOffense(),
+      kicking: this.kickStage !== null,
     };
   }
 
@@ -2693,25 +2829,40 @@ export class Game {
     num.scale.set(0.5);
     num.y = 1;
 
+    // target marker: an upper-right callout chip (offset off the body so it tags
+    // the receiver without sitting on top of him or a player directly above).
+    const LBX = 15;
+    const LBY = -17;
+    const labelBg = new Graphics();
+    labelBg
+      .roundRect(-8, -9, 16, 18, 5)
+      .fill({ color: 0x0a0e1a, alpha: 0.85 })
+      .stroke({ width: 1.5, color: COLORS.highlight });
+    labelBg.x = LBX;
+    labelBg.y = LBY;
+    labelBg.visible = false;
+
     const label = new Text({
       text: p.target ?? "",
       style: {
         fontFamily: "monospace",
-        fontSize: 13,
+        fontSize: 28,
         fill: COLORS.highlight,
         fontWeight: "bold",
-        stroke: { color: 0x000000, width: 3 },
       },
+      resolution: 2,
     });
     label.anchor.set(0.5);
-    label.y = -22;
+    label.scale.set(0.5);
+    label.x = LBX;
+    label.y = LBY;
     label.visible = false;
 
-    c.addChild(shadow, ring, body, num, label);
+    c.addChild(shadow, ring, body, num, labelBg, label);
     c.x = p.x;
     c.y = p.y;
     this.world.addChild(c);
-    this.sprites.set(p.id, { c, body, ring, num, label });
+    this.sprites.set(p.id, { c, body, ring, num, label, labelBg });
   }
 
   // ---- field & overlay drawing ------------------------------------------

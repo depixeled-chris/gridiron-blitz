@@ -194,4 +194,6 @@ export interface HudState {
   canHike: boolean;
   canThrow: boolean;
   canSwitch: boolean;
+  /** a kick meter is awaiting a tap (power or accuracy stage) */
+  kicking: boolean;
 }

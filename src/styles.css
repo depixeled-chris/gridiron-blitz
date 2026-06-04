@@ -570,6 +570,38 @@ body {
   background: rgba(8, 12, 24, 0.85);
 }
 
+/* ---- kick meter tap zone (big target over the lower screen; Space also works) */
+.kick-tap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 40%;
+  border: none;
+  background: linear-gradient(to top, rgba(10, 14, 26, 0.32), rgba(10, 14, 26, 0));
+  color: var(--gold, #ffe600);
+  font-family: "Consolas", monospace;
+  font-weight: 900;
+  letter-spacing: 5px;
+  font-size: clamp(16px, 4.5vw, 28px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10px;
+  z-index: 8;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+  animation: kickpulse 0.9s ease-in-out infinite;
+}
+.kick-tap:active {
+  background: linear-gradient(to top, rgba(10, 14, 26, 0.5), rgba(10, 14, 26, 0));
+}
+@keyframes kickpulse {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
+}
+
 /* ---- touch controls ---- */
 .touch-layer {
   position: absolute;

@@ -27,6 +27,7 @@ const EMPTY: HudState = {
   canHike: false,
   canThrow: false,
   canSwitch: false,
+  kicking: false,
 };
 
 const IS_TOUCH =
@@ -88,6 +89,18 @@ export function App() {
         >
           {muted ? "🔇" : "🔊"}
         </button>
+
+        {hud.kicking && game && (
+          <button
+            className="kick-tap"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              game.tap("Space");
+            }}
+          >
+            TAP
+          </button>
+        )}
 
         {hud.phase === "menu" && <Menu onStart={() => game?.startGame()} />}
         {hud.phase === "playcall" && game && (
