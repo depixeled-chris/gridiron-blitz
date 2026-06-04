@@ -2248,6 +2248,24 @@ export class Game {
       this.touchdown();
       return;
     }
+
+    // out of bounds: the carrier is pinned at a sideline and still driving outward
+    // (clampPositions holds him on the white). Dead at the spot — in the arcade
+    // model the clock is already paused between plays, so no special run-off. Forced
+    // out in his own end zone is a safety, same as a tackle there.
+    const margin = 0.6 * YARD;
+    const outOfBounds =
+      (c.y <= SIDELINE + margin && c.vy < -8) ||
+      (c.y >= WORLD_H - SIDELINE - margin && c.vy > 8);
+    if (outOfBounds) {
+      if (dir > 0 ? c.x <= ownGoal : c.x >= ownGoal) {
+        this.safety();
+        return;
+      }
+      this.audio.whistle();
+      this.endPlay({ type: "oob", spotX: c.x, spotY: c.y });
+      return;
+    }
     // safety (tackled in own end zone) — checked via tackle below
 
     // tackle on contact with a FREE defender (an engaged blocker can't make the
@@ -2375,7 +2393,7 @@ export class Game {
 
   // ---- play resolution ---------------------------------------------------
   private endPlay(res: {
-    type: "tackle" | "incomplete" | "turnover";
+    type: "tackle" | "incomplete" | "turnover" | "oob";
     spotX?: number;
     spotY?: number;
     by?: Player;
@@ -2659,9 +2677,15 @@ export class Game {
 
     const num = new Text({
       text: String(p.number),
-      style: { fontFamily: "monospace", fontSize: 10, fill: 0xffffff, fontWeight: "bold" },
+      // bumped 10 -> 16 visual (numbers were unreadable at gameplay zoom). Rendered
+      // at 32 with resolution 2 then scaled to half so the glyphs stay crisp when
+      // the camera scales the sprite. 16px nearly fills the 22px body — a real
+      // jersey number, two digits still fit.
+      style: { fontFamily: "monospace", fontSize: 32, fill: 0xffffff, fontWeight: "bold" },
+      resolution: 2,
     });
     num.anchor.set(0.5);
+    num.scale.set(0.5);
     num.y = 1;
 
     const label = new Text({

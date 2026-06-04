@@ -290,7 +290,11 @@ body {
 
 /* ---- play call (sized with vh so it always fits the screen) ---- */
 .playcall {
-  background: rgba(6, 10, 20, 0.9);
+  /* bottom-anchored strip: cards sit at the bottom, formation/field shows above */
+  justify-content: flex-end;
+  gap: clamp(4px, 1.2vh, 10px);
+  background: rgba(6, 10, 20, 0.45);
+  padding-bottom: clamp(10px, 2.4vh, 18px);
 }
 .pc-title {
   font-size: clamp(15px, 4vh, 22px);
@@ -329,19 +333,26 @@ body {
   flex: 0 0 auto;
 }
 .pc-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: clamp(6px, 1.6vh, 12px);
-  width: min(560px, 94vw);
-  /* fill the available height: the rows grow to use the screen instead of a short
-     grid floating with empty space below it */
-  flex: 1 1 auto;
-  align-content: stretch;
-  grid-auto-rows: minmax(78px, 1fr);
-  max-height: 78vh;
+  /* single horizontal row anchored at the bottom — keeps the field/formation
+     visible above instead of a tall grid covering the screen. Fixed height so a
+     lone special-teams card can't stretch to the bottom (flexbox stretch bug). */
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  justify-content: center;
+  align-items: stretch;
+  gap: clamp(6px, 1.2vw, 12px);
+  width: 100%;
+  max-width: 1120px;
+  height: clamp(112px, 20vh, 168px);
 }
 .pc-card {
   position: relative;
+  /* equal-width cells in the row; max-width stops one card (special teams) from
+     ballooning to the full width */
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 200px;
   background: linear-gradient(180deg, #18233f, #0f1830);
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -379,10 +390,9 @@ body {
 }
 .pc-art {
   width: 100%;
-  /* grow with the card (which now fills the grid) instead of a fixed cap */
+  /* fill the card height (the card height is now fixed by the row) */
   flex: 1 1 auto;
-  min-height: 56px;
-  max-height: 26vh;
+  min-height: 0;
   background: #0c1426;
   border-radius: 6px;
 }
