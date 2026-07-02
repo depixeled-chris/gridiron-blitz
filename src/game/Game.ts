@@ -2015,7 +2015,6 @@ export class Game {
     b.t = 0;
     b.elapsed = 0;
     b.tip = false;
-    b.tipDead = false;
     b.swatDone = false;
     const throwDist = dist(qb.x, qb.y, landX, landY);
     b.ftime = Math.max(0.32, throwDist / speed);
@@ -2053,10 +2052,9 @@ export class Game {
     b.y = lerp(b.sy, b.ty, b.t);
 
     if (b.tip) {
-      // loose ball after a tip: low pop-up arc, anyone can grab it — unless it
-      // was swatted DOWN (tipDead), which just animates the hop and dies
+      // loose ball after a tip: low pop-up arc, live for both teams
       b.z = b.peak * Math.sin(Math.PI * b.t);
-      if (!b.tipDead) this.resolveLoose();
+      this.resolveLoose();
       if (this.ball.inAir && b.t >= 1) this.incomplete(); // hit the turf
       return;
     }
@@ -2196,26 +2194,41 @@ export class Game {
     return this.incomplete(); // off-target throw knocked away — no play
   }
 
-  /** a deflected ball is live: the closest FREE player under it (either team)
-   * grabs it — a lineman leaning into his block can't peel off and snag it,
-   * which is what kept every line deflection from becoming a turnover scrum */
+  /** a deflected ball is LIVE for both teams — but securing it is an
+   * OPPORTUNITY, not a certainty: every FREE player under the ball gets one
+   * ratings-tilted grab attempt (closest hands first, engaged blockers can't
+   * peel off for it), so most deflections still fall incomplete while either
+   * team can come up with the tip. A low swatted-down hop is much harder to
+   * pluck than a high floating tip. */
   private resolveLoose() {
     const b = this.ball;
     // let it pop up first so the tipper can't instantly re-grab it
-    if (b.t < 0.35) return;
-    let best: Player | null = null;
-    let bd = CATCH_R;
-    for (const p of this.players) {
-      if (this.neutralized(p) || p.stun > 0) continue;
-      const d = dist(p.x, p.y, b.x, b.y);
-      if (d < bd && b.z <= REACH) {
-        bd = d;
-        best = p;
+    if (b.t < 0.35 || b.z > REACH) return;
+    const cands = this.players
+      .filter(
+        (p) =>
+          !p.tipTried &&
+          !this.neutralized(p) &&
+          p.stun <= 0 &&
+          // offensive linemen are leaning into their blocks, not ball-hawking
+          // (neutralized() only marks the DEFENDER side of an engagement)
+          !(p.team === this.possession && p.role === "OL") &&
+          dist(p.x, p.y, b.x, b.y) < CATCH_R
+      )
+      .sort((a, c) => dist(a.x, a.y, b.x, b.y) - dist(c.x, c.y, b.x, b.y));
+    const hang = clamp(b.peak / (1.4 * YARD), 0.35, 1); // low hop = tiny window
+    for (const p of cands) {
+      p.tipTried = true; // one swing at it — a bobble doesn't re-roll every frame
+      const skill =
+        p.team === this.possession
+          ? (rate(p.rat, "CTH") + rate(p.rat, "SPC")) / 2
+          : (rate(p.rat, "INT") + rate(p.rat, "JMP")) / 2;
+      const chance = clamp(0.26 + (skill - 70) / 250, 0.1, 0.5) * hang;
+      if (rng() < chance) {
+        if (p.team === this.possession) return this.completePass(p);
+        return this.interception(p);
       }
     }
-    if (!best) return;
-    if (best.team === this.possession) this.completePass(best);
-    else this.interception(best);
   }
 
   /** deflect the ball up into a live loose ball near the defender */
@@ -2223,6 +2236,8 @@ export class Game {
     const b = this.ball;
     b.tip = true;
     b.targetId = null;
+    for (const p of this.players) p.tipTried = false; // fresh 50/50 ball
+    by.tipTried = true; // the tipper already played it — no instant re-grab
     b.sx = b.x;
     b.sy = b.y;
     // pops up and falls a couple of yards off the deflection
@@ -2234,17 +2249,16 @@ export class Game {
     b.t = 0;
     this.message = "TIPPED!";
     this.audio.tackle();
-    void by;
   }
 
-  /** ball swatted toward the turf: a short, fast, visible deflection that is
-   * almost always dead on arrival — only a FREE player standing right where it
-   * comes down (and only in the last instant of the hop) can snag it */
+  /** ball swatted toward the turf: a short, fast, visible deflection — still
+   * live for either team, but the low hard hop makes a pluck a long shot */
   private knockDown(by: Player) {
     const b = this.ball;
     b.tip = true;
-    b.tipDead = true;
     b.targetId = null;
+    for (const p of this.players) p.tipTried = false; // fresh 50/50 ball
+    by.tipTried = true; // the swatter already played it — no instant re-grab
     b.sx = b.x;
     b.sy = b.y;
     b.tx = clamp(b.x + (rng() - 0.5) * 2 * YARD, LEFT_GOAL, RIGHT_GOAL);
@@ -2255,7 +2269,6 @@ export class Game {
     b.t = 0;
     this.message = "BLOCKED!";
     this.audio.tackle();
-    void by;
   }
 
   private completePass(r: Player) {
@@ -3004,6 +3017,7 @@ function basePlayer(id: string, team: Team, f: FormSpot): Player {
     burst: 0,
     sep: 0,
     cushion: 0,
+    tipTried: false,
   };
 }
 
@@ -3038,7 +3052,6 @@ function freshBall(): BallState {
     targetId: null,
     peak: 0,
     tip: false,
-    tipDead: false,
     swatDone: false,
   };
 }
