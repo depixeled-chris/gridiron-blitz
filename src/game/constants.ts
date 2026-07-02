@@ -16,7 +16,7 @@ export const SIDELINE = 1 * YARD; // keep players this far inside top/bottom
 export const LEFT_GOAL = ENDZONE * YARD; // 220 — away attacks here
 export const RIGHT_GOAL = (ENDZONE + FIELD_YARDS) * YARD; // 2420 — home attacks here
 
-export const TACKLE_R = 0.95 * YARD;
+export const TACKLE_R = 0.8 * YARD; // sprites are ~0.5yd — require real body overlap, not near-miss trips
 export const CATCH_R = 1.3 * YARD;
 export const BLOCK_R = 1.1 * YARD;
 
@@ -53,6 +53,9 @@ export const CATCH_AREA = CATCH_R * 1.6; // radius around the ball a receiver/de
 export const LAND_ZONE = 2.4 * YARD; // ball-to-landing distance that opens the catch resolution
 export const RELEASE_ZONE = 4.5 * YARD; // ball-to-QB distance inside which the throw can be batted at the line
 export const SWAT_R = DEFLECT_R * 1.2; // a line defender must be this close under the release to attempt a swat
+export const SWAT_Z = 2.1 * YARD; // max ball height a hand at the line can get a piece of — above this
+// the arc has cleared the underneath defender (was gated only by jump REACH, which let defenders
+// "well under the ball" block mid-flight throws several yards past the release)
 export const LEAD_MARGIN = 0.7 * YARD; // a defender must be this much closer to the ball than the WR to undercut it
 export const QUARTER_SECONDS = 120; // arcade-short quarters
 export const PLAY_CLOCK = 25;

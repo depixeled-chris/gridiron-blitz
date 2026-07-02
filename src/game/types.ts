@@ -173,6 +173,8 @@ export interface BallState {
   peak: number;
   /** true while the ball is a live loose ball after a tip — anyone can grab it */
   tip: boolean;
+  /** a swatted-down tip: still animates the short hop, but dead on arrival (no pickup) */
+  tipDead: boolean;
   /** one-shot latch: a line defender already got his single deflection attempt this throw */
   swatDone: boolean;
 }

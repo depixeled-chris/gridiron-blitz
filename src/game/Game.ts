@@ -13,6 +13,7 @@ import {
   PASS_SPEED,
   RELEASE_ZONE,
   SWAT_R,
+  SWAT_Z,
   PLAY_CLOCK,
   QUARTER_SECONDS,
   REACH,
@@ -2014,6 +2015,7 @@ export class Game {
     b.t = 0;
     b.elapsed = 0;
     b.tip = false;
+    b.tipDead = false;
     b.swatDone = false;
     const throwDist = dist(qb.x, qb.y, landX, landY);
     b.ftime = Math.max(0.32, throwDist / speed);
@@ -2051,9 +2053,10 @@ export class Game {
     b.y = lerp(b.sy, b.ty, b.t);
 
     if (b.tip) {
-      // loose ball after a tip: low pop-up arc, anyone can grab it
+      // loose ball after a tip: low pop-up arc, anyone can grab it — unless it
+      // was swatted DOWN (tipDead), which just animates the hop and dies
       b.z = b.peak * Math.sin(Math.PI * b.t);
-      this.resolveLoose();
+      if (!b.tipDead) this.resolveLoose();
       if (this.ball.inAir && b.t >= 1) this.incomplete(); // hit the turf
       return;
     }
@@ -2118,9 +2121,12 @@ export class Game {
 
     // ---- RELEASE ZONE: a defender under the low ball gets ONE deflection
     //      attempt at the line (a one-shot latch, so the per-frame check can't
-    //      re-roll a near-certain swat while the ball clears the rusher). ----
+    //      re-roll a near-certain swat while the ball clears the rusher). The
+    //      ball must still be within SWAT_Z of the hand — past ~1.5yd of flight
+    //      the arc has climbed over the underneath defenders, so a man merely
+    //      standing in the lane a few yards downfield can't touch it. ----
     if (fromQB < RELEASE_ZONE) {
-      if (nd && ndDist <= SWAT_R && !b.swatDone) {
+      if (nd && ndDist <= SWAT_R && b.z <= SWAT_Z && !b.swatDone) {
         b.swatDone = true;
         return this.resolveLineSwat(nd);
       }
@@ -2136,13 +2142,16 @@ export class Game {
   }
 
   /** a defender under the low release gets one swing at the ball; most of the
-   *  time the throw clears his outstretched arm, occasionally he gets a piece. */
+   *  time the throw clears his outstretched arm, occasionally he gets a piece.
+   *  Getting a piece is always a VISIBLE deflection — usually swatted down
+   *  (short hop, dead when it lands), sometimes tipped up into a live ball —
+   *  never an invisible straight-to-turf swat. */
   private resolveLineSwat(d: Player) {
     const roll = rng();
     if (roll < 0.72) return; // clears the rusher's reach — the common case
     if (roll < 0.78) return this.interception(d); // 6% pick at the line
-    if (roll < 0.88) return this.startTip(d); // 10% tipped up — live ball
-    return this.batDown(); // 12% knocked down (incomplete)
+    if (roll < 0.86) return this.startTip(d); // 8% tipped up — live ball
+    return this.knockDown(d); // 14% swatted down — short dead deflection
   }
 
   /** the intended receiver is at the ball: completion is a SMOOTH function of his
@@ -2187,7 +2196,9 @@ export class Game {
     return this.incomplete(); // off-target throw knocked away — no play
   }
 
-  /** a deflected ball is live: the closest player under it (either team) grabs it */
+  /** a deflected ball is live: the closest FREE player under it (either team)
+   * grabs it — a lineman leaning into his block can't peel off and snag it,
+   * which is what kept every line deflection from becoming a turnover scrum */
   private resolveLoose() {
     const b = this.ball;
     // let it pop up first so the tipper can't instantly re-grab it
@@ -2195,6 +2206,7 @@ export class Game {
     let best: Player | null = null;
     let bd = CATCH_R;
     for (const p of this.players) {
+      if (this.neutralized(p) || p.stun > 0) continue;
       const d = dist(p.x, p.y, b.x, b.y);
       if (d < bd && b.z <= REACH) {
         bd = d;
@@ -2225,6 +2237,27 @@ export class Game {
     void by;
   }
 
+  /** ball swatted toward the turf: a short, fast, visible deflection that is
+   * almost always dead on arrival — only a FREE player standing right where it
+   * comes down (and only in the last instant of the hop) can snag it */
+  private knockDown(by: Player) {
+    const b = this.ball;
+    b.tip = true;
+    b.tipDead = true;
+    b.targetId = null;
+    b.sx = b.x;
+    b.sy = b.y;
+    b.tx = clamp(b.x + (rng() - 0.5) * 2 * YARD, LEFT_GOAL, RIGHT_GOAL);
+    b.ty = clamp(b.y + (rng() - 0.5) * 2 * YARD, SIDELINE, WORLD_H - SIDELINE);
+    b.peak = 0.4 * YARD;
+    b.ftime = 0.35;
+    b.elapsed = 0;
+    b.t = 0;
+    this.message = "BLOCKED!";
+    this.audio.tackle();
+    void by;
+  }
+
   private completePass(r: Player) {
     const b = this.ball;
     b.inAir = false;
@@ -2239,13 +2272,6 @@ export class Game {
     }
     this.message = "CAUGHT!";
     this.audio.catchBall();
-  }
-
-  /** ball batted straight to the turf — incomplete */
-  private batDown() {
-    this.ball.z = 0;
-    this.audio.tackle();
-    this.incomplete();
   }
 
   private incomplete() {
@@ -3012,6 +3038,7 @@ function freshBall(): BallState {
     targetId: null,
     peak: 0,
     tip: false,
+    tipDead: false,
     swatDone: false,
   };
 }
