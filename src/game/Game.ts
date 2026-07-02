@@ -3,6 +3,7 @@ import {
   BLOCK_R,
   CATCH_AREA,
   CATCH_R,
+  DEFLECT_R,
   COLORS,
   ENDZONE,
   FIELD_YARDS,
@@ -2195,11 +2196,11 @@ export class Game {
   }
 
   /** a deflected ball is LIVE for both teams — but securing it is an
-   * OPPORTUNITY, not a certainty: every FREE player under the ball gets one
-   * ratings-tilted grab attempt (closest hands first, engaged blockers can't
-   * peel off for it), so most deflections still fall incomplete while either
-   * team can come up with the tip. A low swatted-down hop is much harder to
-   * pluck than a high floating tip. */
+   * OPPORTUNITY, not a certainty: a FREE player RIGHT UNDER the ball
+   * (DEFLECT_R, tighter than a normal catch radius) gets one ratings-tilted
+   * grab attempt. Nobody under it = dead ball on the turf; there is no
+   * closest-player auto-grab. A low swatted-down hop is much harder to pluck
+   * than a high floating tip. */
   private resolveLoose() {
     const b = this.ball;
     // let it pop up first so the tipper can't instantly re-grab it
@@ -2213,7 +2214,7 @@ export class Game {
           // offensive linemen are leaning into their blocks, not ball-hawking
           // (neutralized() only marks the DEFENDER side of an engagement)
           !(p.team === this.possession && p.role === "OL") &&
-          dist(p.x, p.y, b.x, b.y) < CATCH_R
+          dist(p.x, p.y, b.x, b.y) < DEFLECT_R
       )
       .sort((a, c) => dist(a.x, a.y, b.x, b.y) - dist(c.x, c.y, b.x, b.y));
     const hang = clamp(b.peak / (1.4 * YARD), 0.35, 1); // low hop = tiny window
