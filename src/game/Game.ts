@@ -2016,6 +2016,7 @@ export class Game {
     b.t = 0;
     b.elapsed = 0;
     b.tip = false;
+    b.fumble = false;
     b.swatDone = false;
     const throwDist = dist(qb.x, qb.y, landX, landY);
     b.ftime = Math.max(0.32, throwDist / speed);
@@ -2053,10 +2054,14 @@ export class Game {
     b.y = lerp(b.sy, b.ty, b.t);
 
     if (b.tip) {
-      // loose ball after a tip: low pop-up arc, live for both teams
+      // loose ball after a tip/fumble: low arc, live for both teams
       b.z = b.peak * Math.sin(Math.PI * b.t);
       this.resolveLoose();
-      if (this.ball.inAir && b.t >= 1) this.incomplete(); // hit the turf
+      if (this.ball.inAir && b.t >= 1) {
+        // hit the turf: a tipped pass is incomplete, a fumble is dead at the spot
+        if (b.fumble) this.fumbleDead();
+        else this.incomplete();
+      }
       return;
     }
 
@@ -2200,20 +2205,22 @@ export class Game {
    * (DEFLECT_R, tighter than a normal catch radius) gets one ratings-tilted
    * grab attempt. Nobody under it = dead ball on the turf; there is no
    * closest-player auto-grab. A low swatted-down hop is much harder to pluck
-   * than a high floating tip. */
+   * than a high floating tip; diving on a tumbling FUMBLE is near a coin flip. */
   private resolveLoose() {
     const b = this.ball;
     // let it pop up first so the tipper can't instantly re-grab it
     if (b.t < 0.35 || b.z > REACH) return;
+    const fum = b.fumble;
     const cands = this.players
       .filter(
         (p) =>
           !p.tipTried &&
           !this.neutralized(p) &&
           p.stun <= 0 &&
-          // offensive linemen are leaning into their blocks, not ball-hawking
-          // (neutralized() only marks the DEFENDER side of an engagement)
-          !(p.team === this.possession && p.role === "OL") &&
+          // offensive linemen are leaning into their blocks, not ball-hawking —
+          // but EVERYONE dives on a fumble (neutralized() only marks the
+          // DEFENDER side of an engagement)
+          !(!fum && p.team === this.possession && p.role === "OL") &&
           dist(p.x, p.y, b.x, b.y) < DEFLECT_R
       )
       .sort((a, c) => dist(a.x, a.y, b.x, b.y) - dist(c.x, c.y, b.x, b.y));
@@ -2224,9 +2231,15 @@ export class Game {
         p.team === this.possession
           ? (rate(p.rat, "CTH") + rate(p.rat, "SPC")) / 2
           : (rate(p.rat, "INT") + rate(p.rat, "JMP")) / 2;
-      const chance = clamp(0.26 + (skill - 70) / 250, 0.1, 0.5) * hang;
+      const chance = fum
+        ? clamp(0.45 + (skill - 70) / 200, 0.25, 0.7)
+        : clamp(0.26 + (skill - 70) / 250, 0.1, 0.5) * hang;
       if (rng() < chance) {
-        if (p.team === this.possession) return this.completePass(p);
+        if (p.team === this.possession) {
+          this.completePass(p);
+          if (fum) this.message = "RECOVERED!";
+          return;
+        }
         return this.interception(p);
       }
     }
@@ -2250,6 +2263,46 @@ export class Game {
     b.t = 0;
     this.message = "TIPPED!";
     this.audio.tackle();
+  }
+
+  /** the hit jars the ball loose: it squirts a couple of yards (mostly along
+   * the carrier's motion) and tumbles — live for BOTH teams via the same
+   * tight-window pickup as a tip. Nobody falls on it = dead at the spot and
+   * the offense keeps it. */
+  private fumble(c: Player) {
+    const b = this.ball;
+    c.hasBall = false;
+    b.carrier = null;
+    b.inAir = true;
+    b.tip = true;
+    b.fumble = true;
+    b.targetId = null;
+    for (const p of this.players) p.tipTried = false; // everyone dives fresh
+    b.sx = b.x = c.x;
+    b.sy = b.y = c.y;
+    const sp = Math.hypot(c.vx, c.vy);
+    const ux = sp > 1 ? c.vx / sp : 0;
+    const uy = sp > 1 ? c.vy / sp : 0;
+    const fwd = (0.8 + rng() * 1.6) * YARD;
+    b.tx = clamp(c.x + ux * fwd + (rng() - 0.5) * 2 * YARD, LEFT_GOAL, RIGHT_GOAL);
+    b.ty = clamp(c.y + uy * fwd + (rng() - 0.5) * 2 * YARD, SIDELINE, WORLD_H - SIDELINE);
+    b.peak = 0.5 * YARD;
+    b.ftime = 0.8; // slow tumble — time for the pile to arrive
+    b.elapsed = 0;
+    b.t = 0;
+    this.message = "FUMBLE!";
+    this.audio.tackle();
+  }
+
+  /** nobody fell on the fumble: dead ball at the spot, offense keeps it */
+  private fumbleDead() {
+    const b = this.ball;
+    b.inAir = false;
+    b.tip = false;
+    b.fumble = false;
+    b.targetId = null;
+    b.z = 0;
+    this.endPlay({ type: "tackle", spotX: b.x, spotY: b.y });
   }
 
   /** ball swatted toward the turf: a short, fast, visible deflection — still
@@ -2276,6 +2329,7 @@ export class Game {
     const b = this.ball;
     b.inAir = false;
     b.tip = false;
+    b.fumble = false;
     b.targetId = null;
     b.z = 0;
     r.hasBall = true;
@@ -2291,6 +2345,7 @@ export class Game {
   private incomplete() {
     this.ball.inAir = false;
     this.ball.tip = false;
+    this.ball.fumble = false;
     this.ball.targetId = null;
     this.endPlay({ type: "incomplete" });
   }
@@ -2298,6 +2353,7 @@ export class Game {
   private interception(by: Player) {
     this.ball.inAir = false;
     this.ball.tip = false;
+    this.ball.fumble = false;
     this.ball.targetId = null;
     this.ball.z = 0;
     this.message = "INTERCEPTED!";
@@ -2467,6 +2523,13 @@ export class Game {
       });
       this.tkAttempts++;
       if (res.win) {
+        // STRIP: the hit can jar the ball loose before the carrier is down —
+        // ball security (CAR) vs the hit, and a big clean shot (sev) strips
+        // more. Rare (~2% of tackles), but a live scramble when it happens.
+        const hitR = (rate(tk.rat, "HIT") + rate(tk.rat, "PWR")) / 2;
+        const secR = rate(c.rat, "CAR");
+        const strip = clamp(0.02 + 0.035 * res.sev + (hitR - secR) / 2000, 0.005, 0.08);
+        if (rng() < strip) return this.fumble(c);
         this.audio.tackle();
         this.endPlay({ type: "tackle", spotX: c.x, spotY: c.y });
         return;
@@ -3053,6 +3116,7 @@ function freshBall(): BallState {
     targetId: null,
     peak: 0,
     tip: false,
+    fumble: false,
     swatDone: false,
   };
 }

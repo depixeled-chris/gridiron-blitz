@@ -175,6 +175,9 @@ export interface BallState {
   peak: number;
   /** true while the ball is a live loose ball after a tip — anyone can grab it */
   tip: boolean;
+  /** the loose ball is a FUMBLE, not a pass: unrecovered = dead at the spot
+   *  (offense keeps it), not an incompletion */
+  fumble: boolean;
   /** one-shot latch: a line defender already got his single deflection attempt this throw */
   swatDone: boolean;
 }
