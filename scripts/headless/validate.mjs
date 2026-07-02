@@ -105,7 +105,8 @@ function kickCell(label, kic, N = 120) {
       g.testChoose("special", "fieldgoal");
       g.testSnap();
       let s = before;
-      for (let k = 0; k < 200; k++) { g.testStep(DT); s = g.testState(); if (s.phase !== "live" && k > 2) break; }
+      // 340-frame budget: kicks now hold ~1.3s at the spot (live rush) before launching
+      for (let k = 0; k < 340; k++) { g.testStep(DT); s = g.testState(); if (s.phase !== "live" && k > 2) break; }
       if (s.score.home - before.score.home === 3) good++;
     }
     out.push(`${d}yd ${String(Math.round(good / N * 100)).padStart(3)}%`);

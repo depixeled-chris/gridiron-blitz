@@ -132,6 +132,10 @@ export class Game {
   private kickPower = 0; // locked at the power tap
   private kickDist = 0; // FG yardage (for the required-power calc)
   private kickAccWin = 0.32; // made-window half-width on the -1..1 accuracy axis
+  // get-off clock for an AI kick: the ball is DOWN and the play is LIVE between
+  // the snap and the launch, so the defense can come after the block. (The human
+  // kicker's meter is his own get-off clock — the field runs underneath it.)
+  private kickHold = 0;
   // point-after state: a try is pending after a TD; conversion is the active attempt
   private tryPending = false;
   private tryMode = false;
@@ -746,6 +750,7 @@ export class Game {
     this.liveTime = 0;
     this.kickMode = null;
     this.kickStage = null;
+    this.kickHold = 0;
     // fresh matchup state for the new play
     for (const p of this.players) {
       p.shed = false;
@@ -805,6 +810,9 @@ export class Game {
     b.z = 0;
     b.t = 0;
     b.elapsed = 0;
+    b.tip = false;
+    b.fumble = false;
+    b.swatDone = false; // one in-flight deflection attempt per kick
     b.inAir = false; // held until the kick launches (meter complete, or auto)
     this.kickMode = kind;
     this.kickDist = kind === "pat" ? 20 : Math.abs(goalX - b.sx) / YARD + 10;
@@ -823,7 +831,10 @@ export class Game {
         kind === "punt" ? "TAP: POWER" : kind === "pat" ? "PAT — TAP: POWER" : "TAP: POWER";
       return;
     }
-    this.resolveKickAuto(kind, dir, goalX, b);
+    // AI kick: the ball sits at the spot for a real get-off window (punt
+    // operations are slower than FG) while the rush comes — then it launches.
+    this.kickHold = kind === "punt" ? 2.0 : 1.3;
+    this.message = "";
   }
 
   /** AI / headless kick: ratings + RNG, no meter (unchanged distribution). */
@@ -857,7 +868,7 @@ export class Game {
 
   /** advance the kick meter; a tap locks the current stage. */
   private updateKickMeter(dt: number) {
-    const speed = 1.7;
+    const speed = 1.0; // was 1.7 — too fast to time; the rush is the pressure now
     this.kickMeter += this.kickMeterDir * speed * dt;
     if (this.kickMeter >= 1) {
       this.kickMeter = 1;
@@ -880,8 +891,67 @@ export class Game {
     }
   }
 
+  /** a defender who has penetrated to the kick spot at launch gets his hands
+   * up: the closer he is to the ball, the more likely the kick is smothered.
+   * Returns true if the kick was blocked (kick machinery already unwound). */
+  private tryBlockKick(): boolean {
+    const b = this.ball;
+    let best: Player | null = null;
+    let bd = Infinity;
+    for (const p of this.players) {
+      if (p.team === this.possession) continue;
+      if (this.neutralized(p) || p.stun > 0) continue;
+      const d = dist(p.x, p.y, b.x, b.y);
+      if (d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    if (!best || bd > 2 * YARD) return false;
+    // right on the ball ≈ 80%, fading to ~15% two yards off
+    const chance = clamp(0.8 - (bd / YARD - 0.4) * 0.42, 0.12, 0.8);
+    if (rng() >= chance) return false;
+    this.blockKick();
+    return true;
+  }
+
+  /** the kick is smothered off the foot: a blocked PAT is simply no good;
+   * a blocked FG/punt caroms backward as a LIVE ball — same scramble as a
+   * fumble (unrecovered = dead where it lies; on 4th down the down counter
+   * turns that into a turnover on downs at the spot). */
+  private blockKick() {
+    const kind = this.kickMode!;
+    this.kickMode = null;
+    this.kickStage = null;
+    this.audio.tackle();
+    if (kind === "pat") {
+      this.kickGood = false;
+      this.message = "BLOCKED!";
+      this.resolvePAT();
+      return;
+    }
+    const b = this.ball;
+    const dir = this.offDir();
+    b.inAir = true;
+    b.tip = true;
+    b.fumble = true;
+    b.targetId = null;
+    for (const p of this.players) p.tipTried = false;
+    b.sx = b.x;
+    b.sy = b.y;
+    // caroms back off the block and bounces behind the kick spot
+    b.tx = clamp(b.x - dir * (1 + rng() * 3) * YARD, LEFT_GOAL, RIGHT_GOAL);
+    b.ty = clamp(b.y + (rng() - 0.5) * 4 * YARD, SIDELINE, WORLD_H - SIDELINE);
+    b.peak = 0.8 * YARD;
+    b.ftime = 0.9;
+    b.elapsed = 0;
+    b.t = 0;
+    this.message = "BLOCKED!";
+  }
+
   /** launch the kick from a metered power (0..1) + aim error (-1..1). */
   private fireKick(power: number, acc: number) {
+    if (this.tryBlockKick()) return;
     const b = this.ball;
     const dir = this.offDir();
     const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
@@ -949,6 +1019,33 @@ export class Game {
     b.x = lerp(b.sx, b.tx, b.t);
     b.y = lerp(b.sy, b.ty, b.t);
     b.z = b.peak * Math.sin(Math.PI * b.t);
+    // LOW OFF THE FOOT: through its first yards the kick is under a raised
+    // hand — a defender in the lane gets ONE deflection attempt (one-shot
+    // latch, like the pass swat). Deeper penetration = far better odds, so
+    // jumping the snap and shooting a gap is how you block a kick.
+    if (b.t < 1 && !b.swatDone && b.z <= SWAT_Z) {
+      const fromSpot = dist(b.x, b.y, b.sx, b.sy);
+      if (fromSpot < 8 * YARD) {
+        let best: Player | null = null;
+        let bd = Infinity;
+        for (const p of this.players) {
+          if (p.team === this.possession) continue;
+          if (p.stun > 0) continue; // on the ground — engaged still gets hands up
+          const d = dist(p.x, p.y, b.x, b.y);
+          if (d < bd) {
+            bd = d;
+            best = p;
+          }
+        }
+        if (best && bd <= SWAT_R) {
+          b.swatDone = true;
+          let chance = clamp(0.55 - (fromSpot / YARD) * 0.09, 0.04, 0.55);
+          // a lineman still locked in his block only gets an arm free
+          if (this.neutralized(best)) chance *= 0.45;
+          if (rng() < chance) return this.blockKick();
+        }
+      }
+    }
     if (b.t < 1) return;
     b.inAir = false;
     b.z = 0;
@@ -1035,8 +1132,10 @@ export class Game {
       if (this.userOnOffense() && this.input.pressed("Space")) this.snapTimer = 0;
       if (this.snapTimer <= 0) this.snap();
     } else if (this.phase === "live") {
+      // the field keeps running UNDER the kick meter — the rush is coming, so
+      // a slow kicker risks the block (that's the get-off pressure)
       if (this.kickStage) this.updateKickMeter(dt);
-      else this.stepLive(dt);
+      this.stepLive(dt);
     } else if (this.phase === "dead") {
       this.deadTimer -= dt;
       if (this.deadTimer <= 0) this.afterPlay();
@@ -1585,7 +1684,12 @@ export class Game {
   }
 
   private rushPasser(p: Player, carrier: Player | null, dt: number) {
-    const aim = carrier ?? { x: this.los, y: WORLD_H / 2, vx: 0, vy: 0 } as Player;
+    // no carrier + kickMode = the ball is teed/held at the spot: rush THE BALL
+    // (that's the block path), not the empty line of scrimmage
+    const aim = carrier ??
+      (this.kickMode
+        ? ({ x: this.ball.x, y: this.ball.y, vx: 0, vy: 0 } as Player)
+        : ({ x: this.los, y: WORLD_H / 2, vx: 0, vy: 0 } as Player));
     const to = carrier ? this.intercept(p, carrier) : { x: aim.x, y: aim.y };
     this.moveToward(p, to.x, to.y, dt, this.neutralized(p) ? 0.4 : 1);
   }
@@ -1758,7 +1862,12 @@ export class Game {
    * dangerous free rusher. A rusher who BEAT his block (shed) becomes the top
    * priority so a free lineman peels off to him instead of standing around. */
   private passProtect(blockers: Player[], carrier: Player | null, dt: number) {
-    const protect = carrier ?? { x: this.los, y: WORLD_H / 2 };
+    // no carrier + kickMode = protecting the KICK SPOT (the held ball), not the LOS
+    const protect =
+      carrier ??
+      (this.kickMode
+        ? { x: this.ball.x, y: this.ball.y }
+        : { x: this.los, y: WORLD_H / 2 });
     const rush = this.players.filter((p) => this.rushers.has(p.id));
     if (!rush.length) {
       for (const ol of blockers) {
@@ -1820,7 +1929,10 @@ export class Game {
       const oy = ol.y - r.y;
       const om = Math.hypot(ox, oy) || 1;
       const align = (ox / om) * qx + (oy / om) * qy; // 1 = directly QB-side of him
-      const lev = -(align - 0.15) * 22; // square set -> negative (helps the OL hold)
+      let lev = -(align - 0.15) * 22; // square set -> negative (helps the OL hold)
+      // kick protection is a lunging wall, not a pass set: rushers shooting
+      // gaps get a real leverage edge, so blocks off the edge are possible
+      if (this.kickMode) lev += 14;
       this.resolveBlock(ol, r, true, dbl, dt, lev);
       if (this.neutralized(r)) {
         // ride him: wall off and push him away from the QB (up/around the arc)
@@ -2034,6 +2146,18 @@ export class Game {
   private updateBall(dt: number) {
     const b = this.ball;
     if (this.kickMode) {
+      if (!b.inAir) {
+        // ball is down at the spot, play live: run the AI get-off clock (the
+        // human's meter launches via fireKick instead)
+        if (this.kickHold > 0) {
+          this.kickHold -= dt;
+          if (this.kickHold <= 0 && !this.tryBlockKick()) {
+            const dir = this.offDir();
+            this.resolveKickAuto(this.kickMode, dir, dir > 0 ? RIGHT_GOAL : LEFT_GOAL, b);
+          }
+        }
+        return;
+      }
       this.updateKick(dt);
       return;
     }
