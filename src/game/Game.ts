@@ -2620,14 +2620,21 @@ export class Game {
       return;
     }
 
-    // out of bounds: the carrier is pinned at a sideline and still driving outward
-    // (clampPositions holds him on the white). Dead at the spot — in the arcade
-    // model the clock is already paused between plays, so no special run-off. Forced
-    // out in his own end zone is a safety, same as a tackle there.
-    const margin = 0.6 * YARD;
+    // out of bounds: the carrier is pinned ON the boundary (clampPositions
+    // holds him on the white) while driving MOSTLY INTO it — heading more than
+    // ~30° outward at real speed. The old check fired on any outward drift
+    // >8px/s (0.36 yd/s!) within 0.6yd of the line, so a back sprinting
+    // upfield brushing the sideline — or carrying leftover momentum from a
+    // juke — was whistled dead with nobody near him and no explanation.
+    // Dead at the spot — in the arcade model the clock is already paused
+    // between plays, so no special run-off. Forced out in his own end zone is
+    // a safety, same as a tackle there.
+    const margin = 0.15 * YARD;
+    const cspd = Math.hypot(c.vx, c.vy);
     const outOfBounds =
-      (c.y <= SIDELINE + margin && c.vy < -8) ||
-      (c.y >= WORLD_H - SIDELINE - margin && c.vy > 8);
+      cspd > 30 &&
+      ((c.y <= SIDELINE + margin && -c.vy > 0.5 * cspd) ||
+        (c.y >= WORLD_H - SIDELINE - margin && c.vy > 0.5 * cspd));
     if (outOfBounds) {
       if (dir > 0 ? c.x <= ownGoal : c.x >= ownGoal) {
         this.safety();
@@ -2843,7 +2850,11 @@ export class Game {
         this.flipPossession(spot);
         return;
       }
-      if (res.type !== "incomplete" && gainYds !== 0)
+      if (res.type === "oob")
+        // say WHY the whistle blew — an unexplained dead ball near the sideline
+        // reads as the play ending for no reason
+        this.message = `OUT OF BOUNDS • ${gainYds >= 0 ? "+" : ""}${gainYds} YDS`;
+      else if (res.type !== "incomplete" && gainYds !== 0)
         this.message = `${gainYds >= 0 ? "+" : ""}${gainYds} YDS`;
     }
   }
