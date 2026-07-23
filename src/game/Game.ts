@@ -1195,11 +1195,14 @@ export class Game {
     this.clampPositions();
     this.checkTackleAndScore();
 
-    // safety net: never let a play hang forever
-    if (this.phase === "live" && this.liveTime > 14) {
-      const c = this.carrier();
-      if (c) this.endPlay({ type: "tackle", spotX: c.x, spotY: c.y });
-      else this.endPlay({ type: "incomplete" });
+    // safety net for a GLITCHED ball only (stuck in the air / loose with no
+    // one able to secure it). A live CARRIER is never force-ended: the old
+    // 14s cap here silently "tackled" a back who had outrun everyone — a
+    // band-aid (adc060e) for the pursuit that could never close, which chase
+    // pursuit now actually fixes. A run ends by tackle, OOB, or the end zone,
+    // period.
+    if (this.phase === "live" && this.liveTime > 14 && !this.carrier()) {
+      this.endPlay({ type: "incomplete" });
     }
   }
 
@@ -1644,6 +1647,30 @@ export class Game {
     if (this.neutralized(p)) {
       this.moveToward(p, to.x, to.y, dt, 0.4);
       return;
+    }
+    // LEVERAGE: a defender IN FRONT of the carrier stays in front. Pure
+    // pursuit sent everyone — including the deep men — charging straight at
+    // the carrier, so the whole defense collapsed into one flock: a single
+    // cut beat the front wave and left nobody between the back and the goal
+    // line. Instead, a downfield defender mirrors the carrier's lane at a
+    // shrinking cushion (giving ground only as fast as the carrier takes it)
+    // and commits to the tackle only once the carrier is on top of him.
+    {
+      const ldir = this.offDir();
+      const aheadYd = (ldir * (p.x - carrier.x)) / YARD;
+      const d = dist(p.x, p.y, carrier.x, carrier.y);
+      if (aheadYd > 1.2 && d > 2.2 * YARD) {
+        const cushion = clamp(aheadYd * 0.5, 1.2, 3.5) * YARD;
+        const tx = carrier.x + ldir * cushion;
+        // track his lateral break with a slight lead so a cut can't flat-foot us
+        const ty = clamp(
+          carrier.y + carrier.vy * 0.35,
+          SIDELINE,
+          WORLD_H - SIDELINE
+        );
+        this.moveToward(p, tx, ty, dt, 1);
+        return;
+      }
     }
     // open-field CHASE: a free defender trailing a carrier who has broken into
     // the open (>8yd past the LOS) runs the pursuit angle flat-out. Without
