@@ -1555,7 +1555,10 @@ export class Game {
     // hit the second level with a burst: a clean crease (no free defender close
     // ahead) lets the back accelerate into open space — this is what turns a
     // 3-yard gain into an explosive run instead of getting run down at the LOS.
-    if (nearestAhead > 3 * YARD) p.burst = Math.max(p.burst, 0.25);
+    // Only while hitting the crease (~10yd past the LOS): refreshed in the open
+    // field it never expired, which made every breakaway an uncatchable housecall.
+    if (nearestAhead > 3 * YARD && dir * (p.x - this.los) < 10 * YARD)
+      p.burst = Math.max(p.burst, 0.25);
     const ty = clamp(p.y + lat * 3.5 * YARD, SIDELINE, WORLD_H - SIDELINE);
     const tx = p.x + dir * 6 * YARD; // commit forward, never steer backward
     void goalX;
@@ -1638,7 +1641,31 @@ export class Game {
   /** pursue the ball carrier; blocked defenders are slowed so lanes can open */
   private pursueCarrier(p: Player, carrier: Player, dt: number) {
     const to = this.intercept(p, carrier);
-    this.moveToward(p, to.x, to.y, dt, this.neutralized(p) ? 0.4 : 1);
+    if (this.neutralized(p)) {
+      this.moveToward(p, to.x, to.y, dt, 0.4);
+      return;
+    }
+    // open-field CHASE: a free defender trailing a carrier who has broken into
+    // the open (>8yd past the LOS) runs the pursuit angle flat-out. Without
+    // this, pursuit ran at exactly 1.0x while the carrier had turbo (1.13x)
+    // and/or break-tackle burst (1.18x) — measured headless: 28% of base-D runs
+    // and 87% of goal-line runs NEVER ENDED (equal-speed pursuit can't close),
+    // i.e. every crease was a guaranteed 100-yard housecall in live play.
+    // The boost scales with how far behind the chaser is: small when he's on
+    // the carrier's hip (a juke or broken tackle still buys real separation,
+    // and a turbo carrier can still outrun close pursuit for the housecall),
+    // large from distance (the pack always reels a breakaway back in). PUR adds
+    // a rating tilt. Gated to the open field: near the line it wrecks the
+    // gap-fit balance (the chase→contact→break→burst N-001 feedback loop).
+    const dir = this.offDir();
+    const gap = (dir * (carrier.x - p.x)) / YARD; // yards the chaser trails by
+    const openField = dir * (carrier.x - this.los) > 8 * YARD;
+    let chase = 1;
+    if (gap > 0 && openField) {
+      const ramp = clamp(gap / 5, 0, 1);
+      chase = 1.04 + ramp * 0.1 + (rate(p.rat, "PUR") / 99) * 0.08;
+    }
+    this.moveToward(p, to.x, to.y, dt, chase);
   }
 
   /** gap-discipline run fit: hold your gap at the LOS until the back commits,
@@ -2100,7 +2127,13 @@ export class Game {
     const distYd = dist(qb.x, qb.y, r.x, r.y) / YARD;
     const accKey = distYd < 20 ? "ACS" : distYd < 40 ? "ACM" : "ACD";
     const acc = rate(qb.rat, accKey);
-    const onRun = Math.hypot(qb.vx, qb.vy) > 0.4 * qb.vmax ? 0.4 : 0; // throwing on the move
+    // throwing on the move: penalty scales with how hard the QB is actually
+    // running. The old flat +0.4 kicked in at just 40% speed — the human QB is
+    // nearly always drifting in the pocket to avoid the rush, so every throw
+    // ate a near-doubled scatter and passing felt broken. A settled or
+    // shuffling QB now throws close to clean; a full-sprint heave still scatters.
+    const mv = Math.hypot(qb.vx, qb.vy) / (qb.vmax || 1);
+    const onRun = mv > 0.35 ? (mv - 0.35) * 0.55 : 0;
     // deeper throws scatter more (harder to be accurate downfield)
     const scatter = (1 - acc / 99 + onRun) * (1.4 + distYd * 0.04) * YARD;
     // lead ~82% of the flight — enough to lead a deep receiver in stride while
@@ -2275,16 +2308,19 @@ export class Game {
    *  (short hop, dead when it lands), sometimes tipped up into a live ball —
    *  never an invisible straight-to-turf swat. */
   private resolveLineSwat(d: Player) {
+    // 28% of low releases getting a piece (with a 6% clean pick) made throwing
+    // over the line a lottery — line INTs alone tripled the NFL's ~2.3%/att
+    // total. Batted balls stay a real threat, but the throw clears far more often.
     const roll = rng();
-    if (roll < 0.72) return; // clears the rusher's reach — the common case
-    if (roll < 0.78) return this.interception(d); // 6% pick at the line
-    if (roll < 0.86) return this.startTip(d); // 8% tipped up — live ball
-    return this.knockDown(d); // 14% swatted down — short dead deflection
+    if (roll < 0.84) return; // clears the rusher's reach — the common case
+    if (roll < 0.86) return this.interception(d); // 2% pick at the line
+    if (roll < 0.92) return this.startTip(d); // 6% tipped up — live ball
+    return this.knockDown(d); // 8% swatted down — short dead deflection
   }
 
   /** the intended receiver is at the ball: completion is a SMOOTH function of his
    * separation + ratings (no hard open/contested cliff — that made it bimodal).
-   * Wide open ≈ 92% (minus drops), even contest (~0.8yd) ≈ 50%, blanketed ≈ low. */
+   * Wide open ≈ 92% (minus drops), even contest (~0.6yd) ≈ 50%, blanketed ≈ low. */
   private resolveCatch(rec: Player, nd: Player | null, ndDist: number) {
     const sep = (nd ? ndDist : 99) / YARD;
     const atk = (rate(rec.rat, "CTH") + rate(rec.rat, "CIT") + rate(rec.rat, "SPC")) / 3;
@@ -2296,7 +2332,11 @@ export class Game {
       def: dfn,
       kind: "catch",
       firstContact: true,
-      leverage: (sep - 0.8) * 13,
+      // 50% point at ~0.6yd separation (was 0.8): human throw timing is never
+      // harness-perfect, so tight-window balls land a beat late — centering the
+      // coin flip at truly blanketed coverage keeps well-timed contested throws
+      // completable without touching the wide-open or smothered ends.
+      leverage: (sep - 0.6) * 13,
     });
     if (res.win) {
       const drop = clamp((90 - atk) / 320, 0.01, 0.11);
@@ -2607,6 +2647,7 @@ export class Game {
     let tk: Player | null = null;
     let tkd = Infinity;
     let gang = 0;
+    let support = 0;
     for (const p of this.players) {
       if (p.team === c.team) continue;
       if (this.neutralized(p) || p.stun > 0) continue; // engaged or knocked down
@@ -2617,6 +2658,8 @@ export class Game {
           tkd = d;
           tk = p;
         }
+      } else if (d < 3.5 * YARD) {
+        support++; // converging — arriving within a step or two of the contact
       }
     }
     if (tk) {
@@ -2642,7 +2685,18 @@ export class Game {
         // NOTE (GB-T001): lowering these INCREASES stuffs (counterintuitive
         // feedback loop in the break/burst dynamics — see N-001). Do not lower
         // without instrumenting why first.
-        leverage: 10 + (gang - 1) * 13 - (userTurbo ? 8 : 0),
+        // OPEN FIELD (>8yd past the LOS): pursuit SUPPORT stacks the contest —
+        // a solo full-speed tackle was a coin flip (leverage +10, momentum -12)
+        // and every break re-opened separation, so breakaways chained ~50/50
+        // rolls into constant 20+ / housecall runs (measured brk20+ 23% vs NFL
+        // 1-4%). With the pack converging the back goes down; a true one-man-
+        // to-beat breakaway is still a live contest. Near the LOS this is 0 —
+        // the pile dynamics stay exactly as tuned (GB-T001).
+        leverage:
+          10 +
+          (gang - 1) * 13 +
+          (dir * (c.x - this.los) > 8 * YARD ? support * 7 : 0) -
+          (userTurbo ? 8 : 0),
         momentum: -spd * 12, // a back at full speed runs through arm tackles
       });
       this.tkAttempts++;
