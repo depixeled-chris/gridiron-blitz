@@ -10,7 +10,13 @@ export const VIEW_W = 960;
 export const VIEW_H = 540;
 export const FIELD_Y = Math.floor((VIEW_H - WORLD_H) / 2); // vertical letterbox offset
 
-export const SIDELINE = 1 * YARD; // keep players this far inside top/bottom
+export const SIDELINE = 1 * YARD; // formation/route/ball-spot inset from top/bottom
+// The MOVEMENT boundary — where a body is actually pinned and a carrier can be
+// forced out. Sits ON the drawn white sideline stripe at the field edge, so the
+// out-of-bounds line IS the line you see (it used to be SIDELINE: a full yard
+// of unmarked green inside the stripe, so carriers were whistled out while
+// visibly standing in the field of play).
+export const BOUNDS = 5; // px — matches the sideline stripe width in drawField
 
 // goal lines (absolute world X)
 export const LEFT_GOAL = ENDZONE * YARD; // 220 — away attacks here

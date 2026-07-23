@@ -30,6 +30,7 @@ import {
   YARD,
   Z_CATCH,
   Z_RELEASE,
+  BOUNDS,
 } from "./constants";
 import { Input } from "./input";
 import { Sfx } from "./audio";
@@ -1267,7 +1268,7 @@ export class Game {
   private clampPositions() {
     for (const p of this.players) {
       p.x = clamp(p.x, 6, WORLD_W - 6);
-      p.y = clamp(p.y, SIDELINE, WORLD_H - SIDELINE);
+      p.y = clamp(p.y, BOUNDS, WORLD_H - BOUNDS);
     }
   }
 
@@ -2630,7 +2631,7 @@ export class Game {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.x = clamp(p.x, 6, WORLD_W - 6);
-      p.y = clamp(p.y, SIDELINE, WORLD_H - SIDELINE);
+      p.y = clamp(p.y, BOUNDS, WORLD_H - BOUNDS);
     }
   }
 
@@ -2656,12 +2657,15 @@ export class Game {
     // Dead at the spot — in the arcade model the clock is already paused
     // between plays, so no special run-off. Forced out in his own end zone is
     // a safety, same as a tackle there.
+    // pinned on the WHITE STRIPE itself (BOUNDS, not the 1yd SIDELINE inset —
+    // being whistled out on unmarked green a yard inside the line read as the
+    // play ending for no reason)
     const margin = 0.15 * YARD;
     const cspd = Math.hypot(c.vx, c.vy);
     const outOfBounds =
       cspd > 30 &&
-      ((c.y <= SIDELINE + margin && -c.vy > 0.5 * cspd) ||
-        (c.y >= WORLD_H - SIDELINE - margin && c.vy > 0.5 * cspd));
+      ((c.y <= BOUNDS + margin && -c.vy > 0.5 * cspd) ||
+        (c.y >= WORLD_H - BOUNDS - margin && c.vy > 0.5 * cspd));
     if (outOfBounds) {
       if (dir > 0 ? c.x <= ownGoal : c.x >= ownGoal) {
         this.safety();
@@ -3210,9 +3214,12 @@ export class Game {
     for (const x of [LEFT_GOAL, RIGHT_GOAL]) {
       g.moveTo(x, 0).lineTo(x, WORLD_H).stroke({ width: 4, color: COLORS.line });
     }
-    // sidelines
-    g.rect(0, 0, WORLD_W, 3).fill(COLORS.line);
-    g.rect(0, WORLD_H - 3, WORLD_W, 3).fill(COLORS.line);
+    // sidelines — thick and unmissable: this stripe IS the out-of-bounds line
+    // the carrier can be forced out on (movement pins at BOUNDS, inside the
+    // band, so a whistled carrier is visibly standing ON the white)
+    const stripe = BOUNDS + 3;
+    g.rect(0, 0, WORLD_W, stripe).fill(COLORS.line);
+    g.rect(0, WORLD_H - stripe, WORLD_W, stripe).fill(COLORS.line);
 
     // hash marks
     for (let y = 1; y < FIELD_YARDS; y++) {
