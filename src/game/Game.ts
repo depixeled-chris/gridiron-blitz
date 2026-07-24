@@ -261,7 +261,7 @@ export class Game {
         OFFENSE_FORMATIONS[0];
       this.offFormation = f;
       this.offPlay = f.plays.find((p) => p.id === playId) ?? f.plays[0];
-      // defense: a forced matchup (tests) or a random front + call
+      // defense: a forced matchup (tests) or the CPU's situational call
       if (this.testDefFormation) {
         this.defFormation =
           DEFENSE_FORMATIONS.find((x) => x.id === this.testDefFormation) ??
@@ -270,8 +270,7 @@ export class Game {
           this.defFormation.plays.find((p) => p.id === this.testDefPlay) ??
           this.defFormation.plays[0];
       } else {
-        this.defFormation = pick(DEFENSE_FORMATIONS);
-        this.defPlay = pick(this.defFormation.plays);
+        this.cpuCallDefense();
       }
     } else {
       const f =
@@ -287,13 +286,7 @@ export class Game {
           this.offFormation.plays.find((p) => p.kind === "pat") ??
           this.offFormation.plays[0];
       } else {
-        // AI offense never punts/kicks or runs a conversion on a normal down
-        this.offFormation = pick(
-          OFFENSE_FORMATIONS.filter(
-            (x) => x.id !== "special" && x.id !== "convert"
-          )
-        );
-        this.offPlay = pick(this.offFormation.plays);
+        this.cpuCallOffense();
       }
     }
     this.setupFormation();
@@ -301,6 +294,98 @@ export class Game {
     this.snapTimer = this.userOnOffense() ? 1.5 : 0.6 + rng() * 0.5;
     this.message = "";
     this.pushHud(true);
+  }
+
+  /** CPU offense: real 4th-down decisions plus a down-and-distance play mix.
+   *  (It used to pick uniformly at random and NEVER kick — it went for it on
+   *  4th-and-anything all game and could only score by touchdown.) */
+  private cpuCallOffense() {
+    const dir = this.offDir();
+    const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
+    const ydsToGoal = Math.abs(goalX - this.los) / YARD;
+    const cpu = this.possession;
+    const opp: Team = cpu === "home" ? "away" : "home";
+    const trailing = this.score[cpu] < this.score[opp];
+    // desperation: late and behind — keep the offense on the field
+    const desperate = this.quarter >= 4 && this.clock < 150 && trailing;
+
+    if (this.down === 4) {
+      const goForIt = desperate || (this.toGo <= 1 && ydsToGoal < 55);
+      if (!goForIt) {
+        const special = OFFENSE_FORMATIONS.find((x) => x.id === "special")!;
+        const fgDist = ydsToGoal + 17; // snap 7yd back + 10yd of end zone
+        if (fgDist <= 58 && this.fgProb(fgDist) >= 0.3) {
+          this.offFormation = special;
+          this.offPlay = special.plays.find((p) => p.kind === "fg")!;
+          return;
+        }
+        this.offFormation = special;
+        this.offPlay = special.plays.find((p) => p.kind === "punt")!;
+        return;
+      }
+    }
+
+    // down-and-distance play mix instead of uniform random: lean run on short
+    // yardage from heavy sets, lean pass on long yardage from spread sets
+    const forms = OFFENSE_FORMATIONS.filter(
+      (x) => x.id !== "special" && x.id !== "convert"
+    );
+    const pool =
+      this.toGo <= 2
+        ? forms.filter((x) => x.id === "iform" || x.id === "goalline")
+        : this.toGo >= 8
+          ? forms.filter((x) => x.id === "shotgun" || x.id === "spread")
+          : forms;
+    this.offFormation = pick(pool.length ? pool : forms);
+    const wantRun = this.toGo <= 2 ? 0.72 : this.toGo >= 8 ? 0.3 : 0.52;
+    const kind = rng() < wantRun ? "run" : "pass";
+    const kindPool = this.offFormation.plays.filter((p) => p.kind === kind);
+    this.offPlay = kindPool.length
+      ? pick(kindPool)
+      : pick(this.offFormation.plays);
+  }
+
+  /** CPU defense: situational front + call. (Uniform random before — GOAL LINE
+   *  fronts showed up at midfield and PREVENT on 1st-and-10.) */
+  private cpuCallDefense() {
+    const dir = this.offDir();
+    const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
+    const ydsToGoal = Math.abs(goalX - this.los) / YARD;
+    const short = this.toGo <= 2;
+    const long = this.toGo >= 8;
+    const off = this.possession;
+    const def: Team = off === "home" ? "away" : "home";
+    const leadLate =
+      this.quarter >= 4 &&
+      this.clock < 90 &&
+      this.score[def] > this.score[off];
+
+    const byId = (id: string) => DEFENSE_FORMATIONS.find((f) => f.id === id)!;
+    let pool: DefenseFormation[];
+    if (ydsToGoal <= 4 || (short && ydsToGoal <= 10))
+      pool = [byId("goalline"), byId("fivetwo"), byId("fourthree")];
+    else if (short) pool = [byId("fivetwo"), byId("fourthree"), byId("threefour")];
+    else if (long) pool = [byId("nickel"), byId("dime"), byId("fourthree")];
+    else
+      pool = DEFENSE_FORMATIONS.filter(
+        (f) => f.id !== "goalline" && f.id !== "dime"
+      );
+    this.defFormation = pick(pool);
+
+    const plays = this.defFormation.plays;
+    let call: DefensePlay | undefined;
+    if (leadLate && long) {
+      call = plays.find((p) => p.id === "prevent"); // protect the lead
+    } else if (short) {
+      const aggro = plays.filter((p) => p.blitzers >= 1 || p.coverage === "man");
+      if (aggro.length) call = pick(aggro); // crowd the line
+    } else {
+      const sane = plays.filter(
+        (p) => p.id !== "prevent" && !(long && p.id === "allout")
+      );
+      if (sane.length) call = pick(sane);
+    }
+    this.defPlay = call ?? pick(plays);
   }
 
   userOnOffense() {
