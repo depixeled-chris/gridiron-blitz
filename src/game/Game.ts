@@ -35,7 +35,11 @@ import { Input } from "./input";
 import { Sfx } from "./audio";
 import { DEFENSE_FORMATIONS, OFFENSE_BASE, OFFENSE_FORMATIONS } from "./plays";
 import { ROSTERS, rate } from "./ratings";
-import { contest, reseed } from "./contest";
+// rng comes from the contest module's SINGLE reseedable stream. Game.ts used to
+// pull a second, never-reseedable rng from utils — so throw scatter, swats,
+// drops, strips, tips, and kick outcomes ignored testReseed and the
+// "deterministic, reproducible" per-play replay contract was quietly half-false.
+import { contest, reseed, rng } from "./contest";
 import type {
   BallState,
   DefenseFormation,
@@ -48,7 +52,7 @@ import type {
   Role,
   Team,
 } from "./types";
-import { clamp, dist, lerp, rng } from "./utils";
+import { clamp, dist, lerp } from "./utils";
 
 interface FormSpot {
   slot: string;
