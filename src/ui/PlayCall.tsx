@@ -90,7 +90,6 @@ export function PlayCall({
           ‹ FORMATIONS
         </button>
         <div className="pc-title sm">{formation.name}</div>
-        <div className="pc-spacer" />
       </div>
       <div className="pc-grid">
         {pagePlays.map((p, i) => (

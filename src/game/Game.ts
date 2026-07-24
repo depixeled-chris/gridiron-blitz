@@ -15,12 +15,10 @@ import {
   RELEASE_ZONE,
   SWAT_R,
   SWAT_Z,
-  PLAY_CLOCK,
   QUARTER_SECONDS,
   REACH,
   RIGHT_GOAL,
   SIDELINE,
-  SPEED,
   TACKLE_R,
   TURBO,
   VIEW_H,
@@ -30,12 +28,17 @@ import {
   YARD,
   Z_CATCH,
   Z_RELEASE,
+  BOUNDS,
 } from "./constants";
 import { Input } from "./input";
 import { Sfx } from "./audio";
 import { DEFENSE_FORMATIONS, OFFENSE_BASE, OFFENSE_FORMATIONS } from "./plays";
 import { ROSTERS, rate } from "./ratings";
-import { contest, reseed } from "./contest";
+// rng comes from the contest module's SINGLE reseedable stream. Game.ts used to
+// pull a second, never-reseedable rng from utils — so throw scatter, swats,
+// drops, strips, tips, and kick outcomes ignored testReseed and the
+// "deterministic, reproducible" per-play replay contract was quietly half-false.
+import { contest, reseed, rng } from "./contest";
 import type {
   BallState,
   DefenseFormation,
@@ -48,7 +51,7 @@ import type {
   Role,
   Team,
 } from "./types";
-import { clamp, dist, lerp, rng } from "./utils";
+import { clamp, dist, lerp } from "./utils";
 
 interface FormSpot {
   slot: string;
@@ -112,7 +115,6 @@ export class Game {
   private firstDownX = 0;
   private quarter = 1;
   private clock = QUARTER_SECONDS;
-  private playClock = PLAY_CLOCK;
   private score: Record<Team, number> = { home: 0, away: 0 };
   private message = "";
   private controlledId = "";
@@ -257,7 +259,7 @@ export class Game {
         OFFENSE_FORMATIONS[0];
       this.offFormation = f;
       this.offPlay = f.plays.find((p) => p.id === playId) ?? f.plays[0];
-      // defense: a forced matchup (tests) or a random front + call
+      // defense: a forced matchup (tests) or the CPU's situational call
       if (this.testDefFormation) {
         this.defFormation =
           DEFENSE_FORMATIONS.find((x) => x.id === this.testDefFormation) ??
@@ -266,8 +268,7 @@ export class Game {
           this.defFormation.plays.find((p) => p.id === this.testDefPlay) ??
           this.defFormation.plays[0];
       } else {
-        this.defFormation = pick(DEFENSE_FORMATIONS);
-        this.defPlay = pick(this.defFormation.plays);
+        this.cpuCallDefense();
       }
     } else {
       const f =
@@ -283,13 +284,7 @@ export class Game {
           this.offFormation.plays.find((p) => p.kind === "pat") ??
           this.offFormation.plays[0];
       } else {
-        // AI offense never punts/kicks or runs a conversion on a normal down
-        this.offFormation = pick(
-          OFFENSE_FORMATIONS.filter(
-            (x) => x.id !== "special" && x.id !== "convert"
-          )
-        );
-        this.offPlay = pick(this.offFormation.plays);
+        this.cpuCallOffense();
       }
     }
     this.setupFormation();
@@ -297,6 +292,98 @@ export class Game {
     this.snapTimer = this.userOnOffense() ? 1.5 : 0.6 + rng() * 0.5;
     this.message = "";
     this.pushHud(true);
+  }
+
+  /** CPU offense: real 4th-down decisions plus a down-and-distance play mix.
+   *  (It used to pick uniformly at random and NEVER kick — it went for it on
+   *  4th-and-anything all game and could only score by touchdown.) */
+  private cpuCallOffense() {
+    const dir = this.offDir();
+    const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
+    const ydsToGoal = Math.abs(goalX - this.los) / YARD;
+    const cpu = this.possession;
+    const opp: Team = cpu === "home" ? "away" : "home";
+    const trailing = this.score[cpu] < this.score[opp];
+    // desperation: late and behind — keep the offense on the field
+    const desperate = this.quarter >= 4 && this.clock < 150 && trailing;
+
+    if (this.down === 4) {
+      const goForIt = desperate || (this.toGo <= 1 && ydsToGoal < 55);
+      if (!goForIt) {
+        const special = OFFENSE_FORMATIONS.find((x) => x.id === "special")!;
+        const fgDist = ydsToGoal + 17; // snap 7yd back + 10yd of end zone
+        if (fgDist <= 58 && this.fgProb(fgDist) >= 0.3) {
+          this.offFormation = special;
+          this.offPlay = special.plays.find((p) => p.kind === "fg")!;
+          return;
+        }
+        this.offFormation = special;
+        this.offPlay = special.plays.find((p) => p.kind === "punt")!;
+        return;
+      }
+    }
+
+    // down-and-distance play mix instead of uniform random: lean run on short
+    // yardage from heavy sets, lean pass on long yardage from spread sets
+    const forms = OFFENSE_FORMATIONS.filter(
+      (x) => x.id !== "special" && x.id !== "convert"
+    );
+    const pool =
+      this.toGo <= 2
+        ? forms.filter((x) => x.id === "iform" || x.id === "goalline")
+        : this.toGo >= 8
+          ? forms.filter((x) => x.id === "shotgun" || x.id === "spread")
+          : forms;
+    this.offFormation = pick(pool.length ? pool : forms);
+    const wantRun = this.toGo <= 2 ? 0.72 : this.toGo >= 8 ? 0.3 : 0.52;
+    const kind = rng() < wantRun ? "run" : "pass";
+    const kindPool = this.offFormation.plays.filter((p) => p.kind === kind);
+    this.offPlay = kindPool.length
+      ? pick(kindPool)
+      : pick(this.offFormation.plays);
+  }
+
+  /** CPU defense: situational front + call. (Uniform random before — GOAL LINE
+   *  fronts showed up at midfield and PREVENT on 1st-and-10.) */
+  private cpuCallDefense() {
+    const dir = this.offDir();
+    const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
+    const ydsToGoal = Math.abs(goalX - this.los) / YARD;
+    const short = this.toGo <= 2;
+    const long = this.toGo >= 8;
+    const off = this.possession;
+    const def: Team = off === "home" ? "away" : "home";
+    const leadLate =
+      this.quarter >= 4 &&
+      this.clock < 90 &&
+      this.score[def] > this.score[off];
+
+    const byId = (id: string) => DEFENSE_FORMATIONS.find((f) => f.id === id)!;
+    let pool: DefenseFormation[];
+    if (ydsToGoal <= 4 || (short && ydsToGoal <= 10))
+      pool = [byId("goalline"), byId("fivetwo"), byId("fourthree")];
+    else if (short) pool = [byId("fivetwo"), byId("fourthree"), byId("threefour")];
+    else if (long) pool = [byId("nickel"), byId("dime"), byId("fourthree")];
+    else
+      pool = DEFENSE_FORMATIONS.filter(
+        (f) => f.id !== "goalline" && f.id !== "dime"
+      );
+    this.defFormation = pick(pool);
+
+    const plays = this.defFormation.plays;
+    let call: DefensePlay | undefined;
+    if (leadLate && long) {
+      call = plays.find((p) => p.id === "prevent"); // protect the lead
+    } else if (short) {
+      const aggro = plays.filter((p) => p.blitzers >= 1 || p.coverage === "man");
+      if (aggro.length) call = pick(aggro); // crowd the line
+    } else {
+      const sane = plays.filter(
+        (p) => p.id !== "prevent" && !(long && p.id === "allout")
+      );
+      if (sane.length) call = pick(sane);
+    }
+    this.defPlay = call ?? pick(plays);
   }
 
   userOnOffense() {
@@ -410,7 +497,7 @@ export class Game {
     this.tryMode = false;
     this.tryPending = false;
     this.conversion = null;
-    this.pendingKickoff = false;
+    this.pendingKickoff = null;
     this.kickMode = null;
     this.kickStage = null;
     // keep the game from ending mid-sample (the arcade clock would otherwise
@@ -544,7 +631,6 @@ export class Game {
   private goToPlaycall() {
     this.phase = "playcall";
     this.ball = freshBall();
-    this.playClock = PLAY_CLOCK;
     this.pushHud(true);
   }
 
@@ -959,7 +1045,12 @@ export class Game {
     b.inAir = true;
     this.audio.kick();
     if (kind === "fg" || kind === "pat") {
-      const reqPower = clamp(this.kickDist / 68, 0.12, 1); // a ~68-yarder needs full leg
+      // leg strength scales with the kicker: a full-power tap reaches ~60yd of
+      // flight for a bad (60) leg up to ~76yd elite. (It was a flat 68 for
+      // everyone — kicker rating only widened the accuracy window, so a
+      // 60-rated kicker with good timing bombed 50-yarders at 100%.)
+      const leg = 68 + (this.kickerRating() - 75) * 0.5;
+      const reqPower = clamp(this.kickDist / leg, 0.12, 1);
       const long = power >= reqPower;
       const straight = Math.abs(acc) <= this.kickAccWin;
       this.kickGood = long && straight;
@@ -991,11 +1082,12 @@ export class Game {
     }
   }
 
-  /** the kicking team's kicker rating (KIC); league-average ~75 when unrated. */
+  /** the kicking team's kicker rating (KIC) — an explicit roster rating now;
+   *  no more silently promoting an exact 70 to 75 (which made a genuinely
+   *  70-rated kicker impossible to roster). */
   private kickerRating() {
     const k = this.byId(`${this.possession}_K`) ?? this.byId(`${this.possession}_QB`);
-    const v = k ? rate(k.rat, "KIC") : 75;
-    return v === 70 ? 75 : v; // unrated (default 70) -> treat as league-average 75
+    return k ? rate(k.rat, "KIC") : 75;
   }
 
   /** FG make probability vs distance, NFL-anchored flat-then-cliff curve. A kicker
@@ -1065,12 +1157,16 @@ export class Game {
       this.score[this.possession] += 3;
       this.message = "FIELD GOAL IS GOOD! +3";
       this.audio.firstDown();
-      this.pendingKickoff = true;
+      this.pendingKickoff = "flip";
     } else {
       this.message = "NO GOOD";
       this.audio.turnover();
-      // opponent takes over at the spot of the kick
-      this.flipPossession(this.los);
+      // opponent takes over at the SPOT OF THE KICK (7yd behind the LOS, per
+      // the real rule) — it was handing them the ball at the LOS itself
+      const dir = this.offDir();
+      this.flipPossession(
+        clamp(this.los - dir * 7 * YARD, LEFT_GOAL, RIGHT_GOAL)
+      );
     }
   }
 
@@ -1088,7 +1184,7 @@ export class Game {
     }
     this.conversion = null;
     this.tryMode = false;
-    this.pendingKickoff = true;
+    this.pendingKickoff = "flip";
   }
 
   /** a two-point conversion play ended: scored => +2, anything else => 0 */
@@ -1106,7 +1202,7 @@ export class Game {
     }
     this.conversion = null;
     this.tryMode = false;
-    this.pendingKickoff = true;
+    this.pendingKickoff = "flip";
   }
 
   private resolvePunt() {
@@ -1127,7 +1223,6 @@ export class Game {
     dt = Math.min(dt, 1 / 30); // clamp huge frames
     if (this.phase === "presnap") {
       this.snapTimer -= dt;
-      this.playClock = Math.max(0, this.playClock - dt);
       // user can hike early on offense
       if (this.userOnOffense() && this.input.pressed("Space")) this.snapTimer = 0;
       if (this.snapTimer <= 0) this.snap();
@@ -1165,11 +1260,15 @@ export class Game {
     // overall game-speed scalar — the live action plays a touch slower so it's
     // readable (players, ball, and timers all scale together). Tune to taste.
     dt *= 0.82;
-    // clock
-    this.clock -= dt;
-    if (this.clock <= 0) {
-      this.clock = 0;
-      this.endQuarterCheck();
+    // clock — endQuarterCheck fires ONCE, on the crossing. (It used to fire
+    // every frame the clock sat at 0, incrementing `quarter` hundreds of times
+    // during the final play; the scoreboard hid it with a min(quarter, 4).)
+    if (this.clock > 0) {
+      this.clock -= dt;
+      if (this.clock <= 0) {
+        this.clock = 0;
+        this.endQuarterCheck();
+      }
     }
 
     this.throwTimer += dt;
@@ -1195,11 +1294,14 @@ export class Game {
     this.clampPositions();
     this.checkTackleAndScore();
 
-    // safety net: never let a play hang forever
-    if (this.phase === "live" && this.liveTime > 14) {
-      const c = this.carrier();
-      if (c) this.endPlay({ type: "tackle", spotX: c.x, spotY: c.y });
-      else this.endPlay({ type: "incomplete" });
+    // safety net for a GLITCHED ball only (stuck in the air / loose with no
+    // one able to secure it). A live CARRIER is never force-ended: the old
+    // 14s cap here silently "tackled" a back who had outrun everyone — a
+    // band-aid (adc060e) for the pursuit that could never close, which chase
+    // pursuit now actually fixes. A run ends by tackle, OOB, or the end zone,
+    // period.
+    if (this.phase === "live" && this.liveTime > 14 && !this.carrier()) {
+      this.endPlay({ type: "incomplete" });
     }
   }
 
@@ -1264,7 +1366,7 @@ export class Game {
   private clampPositions() {
     for (const p of this.players) {
       p.x = clamp(p.x, 6, WORLD_W - 6);
-      p.y = clamp(p.y, SIDELINE, WORLD_H - SIDELINE);
+      p.y = clamp(p.y, BOUNDS, WORLD_H - BOUNDS);
     }
   }
 
@@ -1381,7 +1483,8 @@ export class Game {
     this.moveToward(p, aimX, tgt.y, dt, 1);
     if (dist(p.x, p.y, tgt.x, tgt.y) < BLOCK_R * 1.4) {
       this.resolveBlock(p, tgt, false, false, dt); // open-field block, kernel-decided
-      if (this.neutralized(tgt)) tgt.x -= dir * 0.4; // sustain: shove off the path
+      // sustain: shove off the path — dt-scaled (~1.1 yd/s), was per-frame
+      if (this.neutralized(tgt)) tgt.x -= dir * 24 * dt;
     }
   }
 
@@ -1555,7 +1658,10 @@ export class Game {
     // hit the second level with a burst: a clean crease (no free defender close
     // ahead) lets the back accelerate into open space — this is what turns a
     // 3-yard gain into an explosive run instead of getting run down at the LOS.
-    if (nearestAhead > 3 * YARD) p.burst = Math.max(p.burst, 0.25);
+    // Only while hitting the crease (~10yd past the LOS): refreshed in the open
+    // field it never expired, which made every breakaway an uncatchable housecall.
+    if (nearestAhead > 3 * YARD && dir * (p.x - this.los) < 10 * YARD)
+      p.burst = Math.max(p.burst, 0.25);
     const ty = clamp(p.y + lat * 3.5 * YARD, SIDELINE, WORLD_H - SIDELINE);
     const tx = p.x + dir * 6 * YARD; // commit forward, never steer backward
     void goalX;
@@ -1638,7 +1744,55 @@ export class Game {
   /** pursue the ball carrier; blocked defenders are slowed so lanes can open */
   private pursueCarrier(p: Player, carrier: Player, dt: number) {
     const to = this.intercept(p, carrier);
-    this.moveToward(p, to.x, to.y, dt, this.neutralized(p) ? 0.4 : 1);
+    if (this.neutralized(p)) {
+      this.moveToward(p, to.x, to.y, dt, 0.4);
+      return;
+    }
+    // LEVERAGE: a defender IN FRONT of the carrier stays in front. Pure
+    // pursuit sent everyone — including the deep men — charging straight at
+    // the carrier, so the whole defense collapsed into one flock: a single
+    // cut beat the front wave and left nobody between the back and the goal
+    // line. Instead, a downfield defender mirrors the carrier's lane at a
+    // shrinking cushion (giving ground only as fast as the carrier takes it)
+    // and commits to the tackle only once the carrier is on top of him.
+    {
+      const ldir = this.offDir();
+      const aheadYd = (ldir * (p.x - carrier.x)) / YARD;
+      const d = dist(p.x, p.y, carrier.x, carrier.y);
+      if (aheadYd > 1.2 && d > 2.2 * YARD) {
+        const cushion = clamp(aheadYd * 0.5, 1.2, 3.5) * YARD;
+        const tx = carrier.x + ldir * cushion;
+        // track his lateral break with a slight lead so a cut can't flat-foot us
+        const ty = clamp(
+          carrier.y + carrier.vy * 0.35,
+          SIDELINE,
+          WORLD_H - SIDELINE
+        );
+        this.moveToward(p, tx, ty, dt, 1);
+        return;
+      }
+    }
+    // open-field CHASE: a free defender trailing a carrier who has broken into
+    // the open (>8yd past the LOS) runs the pursuit angle flat-out. Without
+    // this, pursuit ran at exactly 1.0x while the carrier had turbo (1.13x)
+    // and/or break-tackle burst (1.18x) — measured headless: 28% of base-D runs
+    // and 87% of goal-line runs NEVER ENDED (equal-speed pursuit can't close),
+    // i.e. every crease was a guaranteed 100-yard housecall in live play.
+    // The boost scales with how far behind the chaser is: small when he's on
+    // the carrier's hip (a juke or broken tackle still buys real separation,
+    // and a turbo carrier can still outrun close pursuit for the housecall),
+    // large from distance (the pack always reels a breakaway back in). PUR adds
+    // a rating tilt. Gated to the open field: near the line it wrecks the
+    // gap-fit balance (the chase→contact→break→burst N-001 feedback loop).
+    const dir = this.offDir();
+    const gap = (dir * (carrier.x - p.x)) / YARD; // yards the chaser trails by
+    const openField = dir * (carrier.x - this.los) > 8 * YARD;
+    let chase = 1;
+    if (gap > 0 && openField) {
+      const ramp = clamp(gap / 5, 0, 1);
+      chase = 1.04 + ramp * 0.1 + (rate(p.rat, "PUR") / 99) * 0.08;
+    }
+    this.moveToward(p, to.x, to.y, dt, chase);
   }
 
   /** gap-discipline run fit: hold your gap at the LOS until the back commits,
@@ -1935,9 +2089,12 @@ export class Game {
       if (this.kickMode) lev += 14;
       this.resolveBlock(ol, r, true, dbl, dt, lev);
       if (this.neutralized(r)) {
-        // ride him: wall off and push him away from the QB (up/around the arc)
-        r.x -= qx * 0.55;
-        r.y -= qy * 0.55;
+        // ride him: wall off and push him away from the QB (up/around the arc).
+        // dt-scaled (~1.5 yd/s) — the raw per-frame 0.55px made block physics
+        // frame-rate dependent (a 144Hz display shoved 2.4x harder than the
+        // 60Hz-fixed headless sim everything is tuned against).
+        r.x -= qx * 33 * dt;
+        r.y -= qy * 33 * dt;
       }
     }
   }
@@ -2100,7 +2257,13 @@ export class Game {
     const distYd = dist(qb.x, qb.y, r.x, r.y) / YARD;
     const accKey = distYd < 20 ? "ACS" : distYd < 40 ? "ACM" : "ACD";
     const acc = rate(qb.rat, accKey);
-    const onRun = Math.hypot(qb.vx, qb.vy) > 0.4 * qb.vmax ? 0.4 : 0; // throwing on the move
+    // throwing on the move: penalty scales with how hard the QB is actually
+    // running. The old flat +0.4 kicked in at just 40% speed — the human QB is
+    // nearly always drifting in the pocket to avoid the rush, so every throw
+    // ate a near-doubled scatter and passing felt broken. A settled or
+    // shuffling QB now throws close to clean; a full-sprint heave still scatters.
+    const mv = Math.hypot(qb.vx, qb.vy) / (qb.vmax || 1);
+    const onRun = mv > 0.35 ? (mv - 0.35) * 0.55 : 0;
     // deeper throws scatter more (harder to be accurate downfield)
     const scatter = (1 - acc / 99 + onRun) * (1.4 + distYd * 0.04) * YARD;
     // lead ~82% of the flight — enough to lead a deep receiver in stride while
@@ -2275,16 +2438,19 @@ export class Game {
    *  (short hop, dead when it lands), sometimes tipped up into a live ball —
    *  never an invisible straight-to-turf swat. */
   private resolveLineSwat(d: Player) {
+    // 28% of low releases getting a piece (with a 6% clean pick) made throwing
+    // over the line a lottery — line INTs alone tripled the NFL's ~2.3%/att
+    // total. Batted balls stay a real threat, but the throw clears far more often.
     const roll = rng();
-    if (roll < 0.72) return; // clears the rusher's reach — the common case
-    if (roll < 0.78) return this.interception(d); // 6% pick at the line
-    if (roll < 0.86) return this.startTip(d); // 8% tipped up — live ball
-    return this.knockDown(d); // 14% swatted down — short dead deflection
+    if (roll < 0.84) return; // clears the rusher's reach — the common case
+    if (roll < 0.86) return this.interception(d); // 2% pick at the line
+    if (roll < 0.92) return this.startTip(d); // 6% tipped up — live ball
+    return this.knockDown(d); // 8% swatted down — short dead deflection
   }
 
   /** the intended receiver is at the ball: completion is a SMOOTH function of his
    * separation + ratings (no hard open/contested cliff — that made it bimodal).
-   * Wide open ≈ 92% (minus drops), even contest (~0.8yd) ≈ 50%, blanketed ≈ low. */
+   * Wide open ≈ 92% (minus drops), even contest (~0.6yd) ≈ 50%, blanketed ≈ low. */
   private resolveCatch(rec: Player, nd: Player | null, ndDist: number) {
     const sep = (nd ? ndDist : 99) / YARD;
     const atk = (rate(rec.rat, "CTH") + rate(rec.rat, "CIT") + rate(rec.rat, "SPC")) / 3;
@@ -2296,7 +2462,11 @@ export class Game {
       def: dfn,
       kind: "catch",
       firstContact: true,
-      leverage: (sep - 0.8) * 13,
+      // 50% point at ~0.6yd separation (was 0.8): human throw timing is never
+      // harness-perfect, so tight-window balls land a beat late — centering the
+      // coin flip at truly blanketed coverage keeps well-timed contested throws
+      // completable without touching the wide-open or smothered ends.
+      leverage: (sep - 0.6) * 13,
     });
     if (res.win) {
       const drop = clamp((90 - atk) / 320, 0.01, 0.11);
@@ -2563,7 +2733,7 @@ export class Game {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.x = clamp(p.x, 6, WORLD_W - 6);
-      p.y = clamp(p.y, SIDELINE, WORLD_H - SIDELINE);
+      p.y = clamp(p.y, BOUNDS, WORLD_H - BOUNDS);
     }
   }
 
@@ -2580,14 +2750,24 @@ export class Game {
       return;
     }
 
-    // out of bounds: the carrier is pinned at a sideline and still driving outward
-    // (clampPositions holds him on the white). Dead at the spot — in the arcade
-    // model the clock is already paused between plays, so no special run-off. Forced
-    // out in his own end zone is a safety, same as a tackle there.
-    const margin = 0.6 * YARD;
+    // out of bounds: the carrier is pinned ON the boundary (clampPositions
+    // holds him on the white) while driving MOSTLY INTO it — heading more than
+    // ~30° outward at real speed. The old check fired on any outward drift
+    // >8px/s (0.36 yd/s!) within 0.6yd of the line, so a back sprinting
+    // upfield brushing the sideline — or carrying leftover momentum from a
+    // juke — was whistled dead with nobody near him and no explanation.
+    // Dead at the spot — in the arcade model the clock is already paused
+    // between plays, so no special run-off. Forced out in his own end zone is
+    // a safety, same as a tackle there.
+    // pinned on the WHITE STRIPE itself (BOUNDS, not the 1yd SIDELINE inset —
+    // being whistled out on unmarked green a yard inside the line read as the
+    // play ending for no reason)
+    const margin = 0.15 * YARD;
+    const cspd = Math.hypot(c.vx, c.vy);
     const outOfBounds =
-      (c.y <= SIDELINE + margin && c.vy < -8) ||
-      (c.y >= WORLD_H - SIDELINE - margin && c.vy > 8);
+      cspd > 30 &&
+      ((c.y <= BOUNDS + margin && -c.vy > 0.5 * cspd) ||
+        (c.y >= WORLD_H - BOUNDS - margin && c.vy > 0.5 * cspd));
     if (outOfBounds) {
       if (dir > 0 ? c.x <= ownGoal : c.x >= ownGoal) {
         this.safety();
@@ -2607,6 +2787,7 @@ export class Game {
     let tk: Player | null = null;
     let tkd = Infinity;
     let gang = 0;
+    let support = 0;
     for (const p of this.players) {
       if (p.team === c.team) continue;
       if (this.neutralized(p) || p.stun > 0) continue; // engaged or knocked down
@@ -2617,6 +2798,8 @@ export class Game {
           tkd = d;
           tk = p;
         }
+      } else if (d < 3.5 * YARD) {
+        support++; // converging — arriving within a step or two of the contact
       }
     }
     if (tk) {
@@ -2642,7 +2825,18 @@ export class Game {
         // NOTE (GB-T001): lowering these INCREASES stuffs (counterintuitive
         // feedback loop in the break/burst dynamics — see N-001). Do not lower
         // without instrumenting why first.
-        leverage: 10 + (gang - 1) * 13 - (userTurbo ? 8 : 0),
+        // OPEN FIELD (>8yd past the LOS): pursuit SUPPORT stacks the contest —
+        // a solo full-speed tackle was a coin flip (leverage +10, momentum -12)
+        // and every break re-opened separation, so breakaways chained ~50/50
+        // rolls into constant 20+ / housecall runs (measured brk20+ 23% vs NFL
+        // 1-4%). With the pack converging the back goes down; a true one-man-
+        // to-beat breakaway is still a live contest. Near the LOS this is 0 —
+        // the pile dynamics stay exactly as tuned (GB-T001).
+        leverage:
+          10 +
+          (gang - 1) * 13 +
+          (dir * (c.x - this.los) > 8 * YARD ? support * 7 : 0) -
+          (userTurbo ? 8 : 0),
         momentum: -spd * 12, // a back at full speed runs through arm tackles
       });
       this.tkAttempts++;
@@ -2685,12 +2879,25 @@ export class Game {
       p.dvy = 0;
     }
 
-    // user throws while at QB on a pass play
+    // user throws while at QB on a pass play — but not from past the line of
+    // scrimmage (there was no LOS check at all: you could scramble 20 yards
+    // downfield and legally fire to any receiver, a rule the CPU QB never got
+    // to break). Attempting it says WHY nothing happened instead of eating
+    // the input silently.
     if (
       this.userOnOffense() &&
       this.ball.carrier === p.id &&
       this.offPlay.kind === "pass"
     ) {
+      const ldir = this.offDir();
+      const pastLOS = ldir * (p.x - this.los) > 0.5 * YARD;
+      const wantsThrow =
+        this.input.pressed("KeyJ") ||
+        Object.keys(TARGET_KEYS).some((c) => this.input.pressed(c));
+      if (pastLOS) {
+        if (wantsThrow) this.message = "PAST THE LINE — CAN'T PASS";
+        return;
+      }
       for (const code in TARGET_KEYS) {
         if (this.input.pressed(code)) {
           const key = TARGET_KEYS[code];
@@ -2789,7 +2996,11 @@ export class Game {
         this.flipPossession(spot);
         return;
       }
-      if (res.type !== "incomplete" && gainYds !== 0)
+      if (res.type === "oob")
+        // say WHY the whistle blew — an unexplained dead ball near the sideline
+        // reads as the play ending for no reason
+        this.message = `OUT OF BOUNDS • ${gainYds >= 0 ? "+" : ""}${gainYds} YDS`;
+      else if (res.type !== "incomplete" && gainYds !== 0)
         this.message = `${gainYds >= 0 ? "+" : ""}${gainYds} YDS`;
     }
   }
@@ -2822,12 +3033,16 @@ export class Game {
     this.message = "SAFETY!";
     this.audio.whistle();
     this.audio.turnover();
-    this.pendingKickoff = true;
-    // after a safety, the team that conceded kicks; possession flips
+    // after a safety the team that conceded free-kicks: possession goes to the
+    // scoring team NOW, and the kickoff must NOT flip it again ("keep").
+    this.pendingKickoff = "keep";
     this.possession = def;
   }
 
-  private pendingKickoff = false;
+  /** who receives the post-score kickoff: "flip" = other team (TD/FG/PAT),
+   *  "keep" = possession was already set (safety free kick). A typed flag —
+   *  this used to be decided by comparing this.message to "SAFETY!". */
+  private pendingKickoff: "flip" | "keep" | null = null;
 
   private afterPlay() {
     if (this.quarter > 4) {
@@ -2852,11 +3067,9 @@ export class Game {
       return;
     }
     if (this.pendingKickoff) {
-      this.pendingKickoff = false;
       // simple "kickoff": receiving team starts at own 25
-      const recTeam =
-        this.message === "SAFETY!" ? this.possession : this.flipForKick();
-      void recTeam;
+      if (this.pendingKickoff === "flip") this.flipForKick();
+      this.pendingKickoff = null;
       const dir = this.possession === "home" ? 1 : -1;
       const ownGoal = dir > 0 ? LEFT_GOAL : RIGHT_GOAL;
       this.setNewSeries(ownGoal + dir * 25 * YARD);
@@ -2995,14 +3208,19 @@ export class Game {
       toGo: this.toGo,
       ballOn: this.ballOnText(),
       message: this.message,
-      playClock: Math.ceil(this.playClock),
       userOnOffense: this.userOnOffense(),
       canHike: this.phase === "presnap" && this.userOnOffense(),
       canThrow:
         this.phase === "live" &&
         this.userOnOffense() &&
         this.offPlay.kind === "pass" &&
-        this.ball.carrier?.endsWith("_QB") === true,
+        this.ball.carrier?.endsWith("_QB") === true &&
+        // throw buttons disappear once the QB crosses the line (no forward
+        // passes past the LOS — matches the applyUserMove gate)
+        (() => {
+          const c = this.carrier();
+          return !!c && this.offDir() * (c.x - this.los) <= 0.5 * YARD;
+        })(),
       canSwitch: this.phase === "live" && !this.userOnOffense(),
       kicking: this.kickStage !== null,
     };
@@ -3118,9 +3336,12 @@ export class Game {
     for (const x of [LEFT_GOAL, RIGHT_GOAL]) {
       g.moveTo(x, 0).lineTo(x, WORLD_H).stroke({ width: 4, color: COLORS.line });
     }
-    // sidelines
-    g.rect(0, 0, WORLD_W, 3).fill(COLORS.line);
-    g.rect(0, WORLD_H - 3, WORLD_W, 3).fill(COLORS.line);
+    // sidelines — thick and unmissable: this stripe IS the out-of-bounds line
+    // the carrier can be forced out on (movement pins at BOUNDS, inside the
+    // band, so a whistled carrier is visibly standing ON the white)
+    const stripe = BOUNDS + 3;
+    g.rect(0, 0, WORLD_W, stripe).fill(COLORS.line);
+    g.rect(0, WORLD_H - stripe, WORLD_W, stripe).fill(COLORS.line);
 
     // hash marks
     for (let y = 1; y < FIELD_YARDS; y++) {
@@ -3189,10 +3410,10 @@ function basePlayer(id: string, team: Team, f: FormSpot): Player {
     vy: 0,
     dvx: 0,
     dvy: 0,
-    vmax: SPEED[f.role] * YARD,
+    // placeholders — attachRatings derives the real kinematics from SPD/ACC/AGI
+    vmax: 8 * YARD,
     vacc: 116,
     vturn: 650,
-    speed: SPEED[f.role],
     hasBall: false,
     controlled: false,
     routeIdx: 0,

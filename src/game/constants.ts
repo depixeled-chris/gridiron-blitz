@@ -10,7 +10,13 @@ export const VIEW_W = 960;
 export const VIEW_H = 540;
 export const FIELD_Y = Math.floor((VIEW_H - WORLD_H) / 2); // vertical letterbox offset
 
-export const SIDELINE = 1 * YARD; // keep players this far inside top/bottom
+export const SIDELINE = 1 * YARD; // formation/route/ball-spot inset from top/bottom
+// The MOVEMENT boundary — where a body is actually pinned and a carrier can be
+// forced out. Sits ON the drawn white sideline stripe at the field edge, so the
+// out-of-bounds line IS the line you see (it used to be SIDELINE: a full yard
+// of unmarked green inside the stripe, so carriers were whistled out while
+// visibly standing in the field of play).
+export const BOUNDS = 5; // px — matches the sideline stripe width in drawField
 
 // goal lines (absolute world X)
 export const LEFT_GOAL = ENDZONE * YARD; // 220 — away attacks here
@@ -23,18 +29,6 @@ export const BLOCK_R = 1.1 * YARD;
 export const TURBO = 1.13; // only the user's carrier gets it; 1.28 made him
 // uncatchable vs 1.0x AI pursuit (housecalls / turbo blow-by). A real boost, not a cheat.
 export const SHED_TIME = 1.3; // seconds a block holds before the defender sheds
-
-// speeds, yards/sec
-export const SPEED: Record<string, number> = {
-  QB: 8.2,
-  RB: 9.6,
-  WR: 9.7,
-  TE: 8.6,
-  OL: 7.4,
-  DL: 7.6,
-  LB: 8.8,
-  DB: 9.6,
-};
 
 export const PASS_SPEED = 22 * YARD; // px/sec ground speed of a thrown ball (visible flight, still catchable)
 export const KICK_SPEED = 26 * YARD; // px/sec for FG/punt flight (kept faster than a pass)
@@ -58,7 +52,6 @@ export const SWAT_Z = 2.1 * YARD; // max ball height a hand at the line can get 
 // "well under the ball" block mid-flight throws several yards past the release)
 export const LEAD_MARGIN = 0.7 * YARD; // a defender must be this much closer to the ball than the WR to undercut it
 export const QUARTER_SECONDS = 120; // arcade-short quarters
-export const PLAY_CLOCK = 25;
 
 export const COLORS = {
   fieldDark: 0x1f8f3a,

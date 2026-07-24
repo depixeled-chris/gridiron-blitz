@@ -308,26 +308,35 @@ body {
   letter-spacing: 2px;
 }
 .pc-head {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   width: min(560px, 94vw);
   margin-bottom: clamp(6px, 1.8vh, 12px);
 }
-.pc-back,
-.pc-spacer {
-  flex: 1 1 0;
-}
+/* a real button, not floating text — playtest: "no way to go back once you
+   select a formation" (it existed but read as a caption and was a tiny tap
+   target on touch) */
 .pc-back {
-  text-align: left;
-  background: none;
-  border: none;
-  color: #8fb8ff;
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #18233f;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: #cdd9f0;
   font-weight: 800;
   letter-spacing: 1px;
   font-size: clamp(11px, 2.4vh, 14px);
   cursor: pointer;
-  padding: 4px 0;
+  padding: 8px 12px;
+  min-height: 36px;
+}
+.pc-back:hover {
+  border-color: var(--gold);
+  color: #fff;
 }
 .pc-title.sm {
   flex: 0 0 auto;

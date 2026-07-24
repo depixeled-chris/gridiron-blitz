@@ -108,8 +108,6 @@ export interface Player {
   vturn: number;
   /** sparse ratings (0..99); missing defaults to 70 */
   rat?: Record<string, number | boolean>;
-  /** top speed in yards/sec (legacy fallback) */
-  speed: number;
   hasBall: boolean;
   controlled: boolean;
   /** receiver label key (A/B/C) shown when player can be targeted */
@@ -193,7 +191,6 @@ export interface HudState {
   toGo: number;
   ballOn: string;
   message: string;
-  playClock: number;
   userOnOffense: boolean;
   /** touch-UI context flags */
   canHike: boolean;

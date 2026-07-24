@@ -11,7 +11,7 @@ export type Roster = Record<string, PlayerRatings>;
 export const DEFAULT_RATING = 70;
 
 const HOME_Anvil: Roster = {
-  QB7: { SPD: 72, THP: 84, ACS: 86, ACM: 80, ACD: 74, PLZ: 82, AWR: 82, AGG: -0.2 },
+  QB7: { SPD: 72, THP: 84, ACS: 86, ACM: 80, ACD: 74, PLZ: 82, AWR: 82, KIC: 75, AGG: -0.2 },
   RB28: { SPD: 88, ACC: 86, AGI: 82, CAR: 84, TRK: 74, ELU: 80, BCV: 82, JKM: 80, SPM: 74, SFA: 70, BTK: 78 },
   WR80: { SPD: 90, ACC: 88, AGI: 84, CTH: 84, CIT: 78, SPC: 76, RLS: 82, RRS: 84, RRM: 84, RRD: 82 },
   WR88: { SPD: 84, ACC: 82, AGI: 80, CTH: 86, CIT: 84, SPC: 74, RLS: 78, RRS: 86, RRM: 82, RRD: 74 },
@@ -35,7 +35,7 @@ const HOME_Anvil: Roster = {
 };
 
 const AWAY_Bolt: Roster = {
-  QB7: { SPD: 86, THP: 90, ACS: 80, ACM: 78, ACD: 82, PLZ: 72, AWR: 74, RUN: 84, AGG: 0.4 },
+  QB7: { SPD: 86, THP: 90, ACS: 80, ACM: 78, ACD: 82, PLZ: 72, AWR: 74, RUN: 84, KIC: 75, AGG: 0.4 },
   RB28: { SPD: 94, ACC: 92, AGI: 90, CAR: 78, TRK: 86, ELU: 92, BCV: 86, JKM: 90, SPM: 86, SFA: 80, BTK: 90 },
   WR80: { SPD: 94, ACC: 90, AGI: 86, CTH: 80, CIT: 72, SPC: 82, RLS: 84, RRS: 80, RRM: 80, RRD: 86 },
   WR88: { SPD: 82, ACC: 80, AGI: 78, CTH: 82, CIT: 80, SPC: 72, RLS: 74, RRS: 82, RRM: 80, RRD: 72 },
