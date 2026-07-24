@@ -15,7 +15,6 @@ import {
   RELEASE_ZONE,
   SWAT_R,
   SWAT_Z,
-  PLAY_CLOCK,
   QUARTER_SECONDS,
   REACH,
   RIGHT_GOAL,
@@ -116,7 +115,6 @@ export class Game {
   private firstDownX = 0;
   private quarter = 1;
   private clock = QUARTER_SECONDS;
-  private playClock = PLAY_CLOCK;
   private score: Record<Team, number> = { home: 0, away: 0 };
   private message = "";
   private controlledId = "";
@@ -633,7 +631,6 @@ export class Game {
   private goToPlaycall() {
     this.phase = "playcall";
     this.ball = freshBall();
-    this.playClock = PLAY_CLOCK;
     this.pushHud(true);
   }
 
@@ -1226,7 +1223,6 @@ export class Game {
     dt = Math.min(dt, 1 / 30); // clamp huge frames
     if (this.phase === "presnap") {
       this.snapTimer -= dt;
-      this.playClock = Math.max(0, this.playClock - dt);
       // user can hike early on offense
       if (this.userOnOffense() && this.input.pressed("Space")) this.snapTimer = 0;
       if (this.snapTimer <= 0) this.snap();
@@ -2883,12 +2879,25 @@ export class Game {
       p.dvy = 0;
     }
 
-    // user throws while at QB on a pass play
+    // user throws while at QB on a pass play — but not from past the line of
+    // scrimmage (there was no LOS check at all: you could scramble 20 yards
+    // downfield and legally fire to any receiver, a rule the CPU QB never got
+    // to break). Attempting it says WHY nothing happened instead of eating
+    // the input silently.
     if (
       this.userOnOffense() &&
       this.ball.carrier === p.id &&
       this.offPlay.kind === "pass"
     ) {
+      const ldir = this.offDir();
+      const pastLOS = ldir * (p.x - this.los) > 0.5 * YARD;
+      const wantsThrow =
+        this.input.pressed("KeyJ") ||
+        Object.keys(TARGET_KEYS).some((c) => this.input.pressed(c));
+      if (pastLOS) {
+        if (wantsThrow) this.message = "PAST THE LINE — CAN'T PASS";
+        return;
+      }
       for (const code in TARGET_KEYS) {
         if (this.input.pressed(code)) {
           const key = TARGET_KEYS[code];
@@ -3199,14 +3208,19 @@ export class Game {
       toGo: this.toGo,
       ballOn: this.ballOnText(),
       message: this.message,
-      playClock: Math.ceil(this.playClock),
       userOnOffense: this.userOnOffense(),
       canHike: this.phase === "presnap" && this.userOnOffense(),
       canThrow:
         this.phase === "live" &&
         this.userOnOffense() &&
         this.offPlay.kind === "pass" &&
-        this.ball.carrier?.endsWith("_QB") === true,
+        this.ball.carrier?.endsWith("_QB") === true &&
+        // throw buttons disappear once the QB crosses the line (no forward
+        // passes past the LOS — matches the applyUserMove gate)
+        (() => {
+          const c = this.carrier();
+          return !!c && this.offDir() * (c.x - this.los) <= 0.5 * YARD;
+        })(),
       canSwitch: this.phase === "live" && !this.userOnOffense(),
       kicking: this.kickStage !== null,
     };

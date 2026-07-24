@@ -22,7 +22,6 @@ const EMPTY: HudState = {
   toGo: 10,
   ballOn: "OWN 20",
   message: "",
-  playClock: 25,
   userOnOffense: true,
   canHike: false,
   canThrow: false,

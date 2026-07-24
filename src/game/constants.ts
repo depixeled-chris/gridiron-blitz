@@ -52,7 +52,6 @@ export const SWAT_Z = 2.1 * YARD; // max ball height a hand at the line can get 
 // "well under the ball" block mid-flight throws several yards past the release)
 export const LEAD_MARGIN = 0.7 * YARD; // a defender must be this much closer to the ball than the WR to undercut it
 export const QUARTER_SECONDS = 120; // arcade-short quarters
-export const PLAY_CLOCK = 25;
 
 export const COLORS = {
   fieldDark: 0x1f8f3a,

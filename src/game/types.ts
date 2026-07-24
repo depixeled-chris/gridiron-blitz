@@ -191,7 +191,6 @@ export interface HudState {
   toGo: number;
   ballOn: string;
   message: string;
-  playClock: number;
   userOnOffense: boolean;
   /** touch-UI context flags */
   canHike: boolean;
