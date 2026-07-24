@@ -30,18 +30,6 @@ export const TURBO = 1.13; // only the user's carrier gets it; 1.28 made him
 // uncatchable vs 1.0x AI pursuit (housecalls / turbo blow-by). A real boost, not a cheat.
 export const SHED_TIME = 1.3; // seconds a block holds before the defender sheds
 
-// speeds, yards/sec
-export const SPEED: Record<string, number> = {
-  QB: 8.2,
-  RB: 9.6,
-  WR: 9.7,
-  TE: 8.6,
-  OL: 7.4,
-  DL: 7.6,
-  LB: 8.8,
-  DB: 9.6,
-};
-
 export const PASS_SPEED = 22 * YARD; // px/sec ground speed of a thrown ball (visible flight, still catchable)
 export const KICK_SPEED = 26 * YARD; // px/sec for FG/punt flight (kept faster than a pass)
 

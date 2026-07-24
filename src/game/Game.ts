@@ -20,7 +20,6 @@ import {
   REACH,
   RIGHT_GOAL,
   SIDELINE,
-  SPEED,
   TACKLE_R,
   TURBO,
   VIEW_H,
@@ -411,7 +410,7 @@ export class Game {
     this.tryMode = false;
     this.tryPending = false;
     this.conversion = null;
-    this.pendingKickoff = false;
+    this.pendingKickoff = null;
     this.kickMode = null;
     this.kickStage = null;
     // keep the game from ending mid-sample (the arcade clock would otherwise
@@ -960,7 +959,12 @@ export class Game {
     b.inAir = true;
     this.audio.kick();
     if (kind === "fg" || kind === "pat") {
-      const reqPower = clamp(this.kickDist / 68, 0.12, 1); // a ~68-yarder needs full leg
+      // leg strength scales with the kicker: a full-power tap reaches ~60yd of
+      // flight for a bad (60) leg up to ~76yd elite. (It was a flat 68 for
+      // everyone — kicker rating only widened the accuracy window, so a
+      // 60-rated kicker with good timing bombed 50-yarders at 100%.)
+      const leg = 68 + (this.kickerRating() - 75) * 0.5;
+      const reqPower = clamp(this.kickDist / leg, 0.12, 1);
       const long = power >= reqPower;
       const straight = Math.abs(acc) <= this.kickAccWin;
       this.kickGood = long && straight;
@@ -992,11 +996,12 @@ export class Game {
     }
   }
 
-  /** the kicking team's kicker rating (KIC); league-average ~75 when unrated. */
+  /** the kicking team's kicker rating (KIC) — an explicit roster rating now;
+   *  no more silently promoting an exact 70 to 75 (which made a genuinely
+   *  70-rated kicker impossible to roster). */
   private kickerRating() {
     const k = this.byId(`${this.possession}_K`) ?? this.byId(`${this.possession}_QB`);
-    const v = k ? rate(k.rat, "KIC") : 75;
-    return v === 70 ? 75 : v; // unrated (default 70) -> treat as league-average 75
+    return k ? rate(k.rat, "KIC") : 75;
   }
 
   /** FG make probability vs distance, NFL-anchored flat-then-cliff curve. A kicker
@@ -1066,12 +1071,16 @@ export class Game {
       this.score[this.possession] += 3;
       this.message = "FIELD GOAL IS GOOD! +3";
       this.audio.firstDown();
-      this.pendingKickoff = true;
+      this.pendingKickoff = "flip";
     } else {
       this.message = "NO GOOD";
       this.audio.turnover();
-      // opponent takes over at the spot of the kick
-      this.flipPossession(this.los);
+      // opponent takes over at the SPOT OF THE KICK (7yd behind the LOS, per
+      // the real rule) — it was handing them the ball at the LOS itself
+      const dir = this.offDir();
+      this.flipPossession(
+        clamp(this.los - dir * 7 * YARD, LEFT_GOAL, RIGHT_GOAL)
+      );
     }
   }
 
@@ -1089,7 +1098,7 @@ export class Game {
     }
     this.conversion = null;
     this.tryMode = false;
-    this.pendingKickoff = true;
+    this.pendingKickoff = "flip";
   }
 
   /** a two-point conversion play ended: scored => +2, anything else => 0 */
@@ -1107,7 +1116,7 @@ export class Game {
     }
     this.conversion = null;
     this.tryMode = false;
-    this.pendingKickoff = true;
+    this.pendingKickoff = "flip";
   }
 
   private resolvePunt() {
@@ -1166,11 +1175,15 @@ export class Game {
     // overall game-speed scalar — the live action plays a touch slower so it's
     // readable (players, ball, and timers all scale together). Tune to taste.
     dt *= 0.82;
-    // clock
-    this.clock -= dt;
-    if (this.clock <= 0) {
-      this.clock = 0;
-      this.endQuarterCheck();
+    // clock — endQuarterCheck fires ONCE, on the crossing. (It used to fire
+    // every frame the clock sat at 0, incrementing `quarter` hundreds of times
+    // during the final play; the scoreboard hid it with a min(quarter, 4).)
+    if (this.clock > 0) {
+      this.clock -= dt;
+      if (this.clock <= 0) {
+        this.clock = 0;
+        this.endQuarterCheck();
+      }
     }
 
     this.throwTimer += dt;
@@ -1385,7 +1398,8 @@ export class Game {
     this.moveToward(p, aimX, tgt.y, dt, 1);
     if (dist(p.x, p.y, tgt.x, tgt.y) < BLOCK_R * 1.4) {
       this.resolveBlock(p, tgt, false, false, dt); // open-field block, kernel-decided
-      if (this.neutralized(tgt)) tgt.x -= dir * 0.4; // sustain: shove off the path
+      // sustain: shove off the path — dt-scaled (~1.1 yd/s), was per-frame
+      if (this.neutralized(tgt)) tgt.x -= dir * 24 * dt;
     }
   }
 
@@ -1990,9 +2004,12 @@ export class Game {
       if (this.kickMode) lev += 14;
       this.resolveBlock(ol, r, true, dbl, dt, lev);
       if (this.neutralized(r)) {
-        // ride him: wall off and push him away from the QB (up/around the arc)
-        r.x -= qx * 0.55;
-        r.y -= qy * 0.55;
+        // ride him: wall off and push him away from the QB (up/around the arc).
+        // dt-scaled (~1.5 yd/s) — the raw per-frame 0.55px made block physics
+        // frame-rate dependent (a 144Hz display shoved 2.4x harder than the
+        // 60Hz-fixed headless sim everything is tuned against).
+        r.x -= qx * 33 * dt;
+        r.y -= qy * 33 * dt;
       }
     }
   }
@@ -2918,12 +2935,16 @@ export class Game {
     this.message = "SAFETY!";
     this.audio.whistle();
     this.audio.turnover();
-    this.pendingKickoff = true;
-    // after a safety, the team that conceded kicks; possession flips
+    // after a safety the team that conceded free-kicks: possession goes to the
+    // scoring team NOW, and the kickoff must NOT flip it again ("keep").
+    this.pendingKickoff = "keep";
     this.possession = def;
   }
 
-  private pendingKickoff = false;
+  /** who receives the post-score kickoff: "flip" = other team (TD/FG/PAT),
+   *  "keep" = possession was already set (safety free kick). A typed flag —
+   *  this used to be decided by comparing this.message to "SAFETY!". */
+  private pendingKickoff: "flip" | "keep" | null = null;
 
   private afterPlay() {
     if (this.quarter > 4) {
@@ -2948,11 +2969,9 @@ export class Game {
       return;
     }
     if (this.pendingKickoff) {
-      this.pendingKickoff = false;
       // simple "kickoff": receiving team starts at own 25
-      const recTeam =
-        this.message === "SAFETY!" ? this.possession : this.flipForKick();
-      void recTeam;
+      if (this.pendingKickoff === "flip") this.flipForKick();
+      this.pendingKickoff = null;
       const dir = this.possession === "home" ? 1 : -1;
       const ownGoal = dir > 0 ? LEFT_GOAL : RIGHT_GOAL;
       this.setNewSeries(ownGoal + dir * 25 * YARD);
@@ -3288,10 +3307,10 @@ function basePlayer(id: string, team: Team, f: FormSpot): Player {
     vy: 0,
     dvx: 0,
     dvy: 0,
-    vmax: SPEED[f.role] * YARD,
+    // placeholders — attachRatings derives the real kinematics from SPD/ACC/AGI
+    vmax: 8 * YARD,
     vacc: 116,
     vturn: 650,
-    speed: SPEED[f.role],
     hasBall: false,
     controlled: false,
     routeIdx: 0,
