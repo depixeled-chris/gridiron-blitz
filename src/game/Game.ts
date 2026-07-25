@@ -267,6 +267,8 @@ export class Game {
       dir: rng() < 0.5 ? 1 : -1,
       mph: Math.round(rng() * 19),
     };
+    this.windTarget = this.wind.mph;
+    this.windTimer = 20 + rng() * 40;
     this.tossResult = null;
     this.tossChoice = null;
     this.phase = "toss";
@@ -546,6 +548,10 @@ export class Game {
         })),
     };
   }
+  /** dev/debug: live wind (unrounded) */
+  debugWind() {
+    return { dir: this.wind.dir, mph: this.wind.mph, target: this.windTarget };
+  }
   debugBall() {
     const b = this.ball;
     const tgt = b.targetId ? this.byId(b.targetId) : null;
@@ -599,7 +605,10 @@ export class Game {
   //      possession flips so a suite can run a fixed script of plays) ----------
   /** start a fresh HOME offensive series with the LOS at `ownYd` (0-100). */
   testNewSeries(ownYd: number) {
-    this.wind = { dir: 1, mph: 0 }; // calm by default so the suite is deterministic
+    // calm and PINNED by default so the suite is deterministic
+    this.wind = { dir: 1, mph: 0 };
+    this.windTarget = 0;
+    this.windTimer = 1e9;
     this.possession = this.userTeam;
     this.tryMode = false;
     this.tryPending = false;
@@ -647,6 +656,8 @@ export class Game {
   /** force the game-day wind (harness): dir +1/-1 toward a goal, speed mph. */
   testWind(dir: number, mph: number) {
     this.wind = { dir, mph };
+    this.windTarget = mph; // pinned: the harness measures a fixed wind
+    this.windTimer = 1e9;
   }
   /** force the defensive matchup (formation+call); null = random AI defense. */
   testDefense(formationId: string | null, playId: string | null) {
@@ -703,7 +714,7 @@ export class Game {
   testState() {
     return {
       phase: this.phase,
-      wind: { ...this.wind },
+      wind: { dir: this.wind.dir, mph: Math.round(this.wind.mph) },
       possession: this.possession,
       score: { ...this.score },
       msg: this.message,
@@ -1639,6 +1650,26 @@ export class Game {
   /** How many YARDS the wind is worth to a kick travelling in `dir`. Positive =
    * at your back. About a quarter-yard per mph, so a 16mph wind is roughly four
    * yards of field-goal range either way — enough to change a fourth-down call. */
+  /** Wind drifts with the game clock: it eases toward a target that only
+   * changes every 20-60s, at most ~0.5mph per second, so it builds and dies
+   * over a quarter. It can only SWING AROUND once it has gone nearly calm —
+   * a 15mph wind never reverses between two snaps. */
+  private updateWind(dt: number) {
+    this.windTimer -= dt;
+    if (this.windTimer <= 0) {
+      this.windTimer = 20 + rng() * 40;
+      this.windTarget = clamp(this.wind.mph + (rng() - 0.5) * 8, 0, 22);
+    }
+    const step = 0.5 * dt; // mph per second ceiling — always a gradual change
+    const d = this.windTarget - this.wind.mph;
+    this.wind.mph = clamp(this.wind.mph + clamp(d, -step, step), 0, 22);
+    // it swings around only after dying off, and even then rarely
+    if (this.wind.mph < 3 && rng() < 0.0012) {
+      this.wind.dir = -this.wind.dir;
+      this.windTarget = 3 + rng() * 8; // and freshens from the new quarter
+    }
+  }
+
   private windAssist(dir: number) {
     return this.wind.mph * 0.25 * (this.wind.dir === dir ? 1 : -1);
   }
@@ -1825,6 +1856,7 @@ export class Game {
     // during the final play; the scoreboard hid it with a min(quarter, 4).)
     if (this.clock > 0) {
       this.clock -= dt;
+      this.updateWind(dt); // drifts with the game clock, never per kick
       if (this.clock <= 0) {
         this.clock = 0;
         this.endQuarterCheck();
@@ -3756,6 +3788,11 @@ export class Game {
    *  ends here), so it's a standing advantage one way and a tax the other —
    *  which is what makes the toss a real choice instead of "always receive". */
   private wind = { dir: 1, mph: 0 };
+  /** where the wind is heading next, and how long until it picks a new mind.
+   *  The speed EASES toward the target — it is never re-rolled on a kick, so a
+   *  gust can build or die across a quarter but never jumps between snaps. */
+  private windTarget = 0;
+  private windTimer = 0;
   /** a half just ended: the next play is the second-half kickoff */
   private halftimeKickoff = false;
   /** this play is a KICKOFF RETURN: it ends in a fresh series for the returner's
@@ -3952,7 +3989,7 @@ export class Game {
   private hudState(): HudState {
     return {
       phase: this.phase,
-      wind: { ...this.wind },
+      wind: { dir: this.wind.dir, mph: Math.round(this.wind.mph) },
       quarter: this.quarter,
       clock: Math.ceil(this.clock),
       home: this.score.home,
