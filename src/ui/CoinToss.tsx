@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Wind } from "../game/types";
 
 type Toss = {
@@ -22,6 +22,27 @@ export function CoinToss({
   onContinue: () => void;
 }) {
   const [spin, setSpin] = useState(false);
+  // The coin used to render its FINAL face for the whole animation, so it never
+  // showed the other side — it read as a two-headed coin. Tumble through both
+  // faces while it's in the air, then land on the actual result.
+  const [face, setFace] = useState<"heads" | "tails">("heads");
+  const flip = result?.flip;
+  useEffect(() => {
+    if (!flip) return;
+    let n = 0;
+    const id = setInterval(() => {
+      n += 1;
+      setFace(n % 2 ? "tails" : "heads");
+    }, 65);
+    const land = setTimeout(() => {
+      clearInterval(id);
+      setFace(flip);
+    }, 640);
+    return () => {
+      clearInterval(id);
+      clearTimeout(land);
+    };
+  }, [flip]);
   const call = (pick: "heads" | "tails") => {
     setSpin(true);
     onCall(pick);
@@ -53,7 +74,7 @@ export function CoinToss({
         ) : (
           <>
             <div className={`toss-coin${spin ? " spun" : ""}`}>
-              {result.flip === "heads" ? "H" : "T"}
+              {face === "heads" ? "H" : "T"}
             </div>
             <div className="toss-sub">
               {result.flip.toUpperCase()} —{" "}
