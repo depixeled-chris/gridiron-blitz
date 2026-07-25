@@ -104,9 +104,11 @@ export function App() {
           </button>
         )}
 
-        {hud.phase !== "menu" && hud.phase !== "gameover" && (
-          <WindSock wind={hud.wind} />
-        )}
+        {/* not during the toss — that card reports the wind itself, and the
+            field sock would show through the overlay onto the choice box */}
+        {hud.phase !== "menu" &&
+          hud.phase !== "gameover" &&
+          hud.phase !== "toss" && <WindSock wind={hud.wind} />}
         {hud.phase === "menu" && <Menu onStart={() => game?.startGame()} />}
         {hud.phase === "toss" && game && (
           <CoinToss
