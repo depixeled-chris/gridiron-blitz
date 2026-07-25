@@ -257,6 +257,14 @@ export class Game {
   startGame() {
     this.audio.resume();
     this.audio.select();
+    // The contest stream is seeded from a CONSTANT at module load so the
+    // headless suite replays identically. That means a real game replayed the
+    // same rolls on every page load — the opening coin flip was literally the
+    // same result every time. Seed a live game from real entropy; the harness
+    // still calls testReseed() for reproducibility.
+    if (!this.headless) {
+      reseed(((Date.now() ^ (Math.random() * 0xffffffff)) >>> 0) || 1);
+    }
     this.score = { home: 0, away: 0 };
     this.quarter = 1;
     this.clock = QUARTER_SECONDS;
