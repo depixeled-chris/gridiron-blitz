@@ -850,58 +850,48 @@ body {
 @keyframes faceHt { 0%,9%{opacity:1} 10%,29%{opacity:0} 30%,49%{opacity:1} 50%,69%{opacity:0} 70%,89%{opacity:1} 90%,100%{opacity:0} }
 @keyframes faceTt { 0%,9%{opacity:0} 10%,29%{opacity:1} 30%,49%{opacity:0} 50%,69%{opacity:1} 70%,89%{opacity:0} 90%,100%{opacity:1} }
 
-/* ---- playcall: one swipeable page per formation ----------------------- */
-.pc-head { display: flex; align-items: center; justify-content: center; gap: 10px; }
-.pc-arrow {
-  background: rgba(24, 35, 63, 0.9);
-  border: 1px solid var(--line);
-  color: #eef2fb;
-  border-radius: 8px;
-  width: 30px; height: 30px;
-  font-size: 17px; line-height: 1;
-  cursor: pointer;
-}
-.pc-arrow:disabled { opacity: 0.3; }
-.pc-tag { margin-left: 8px; opacity: 0.6; font-size: 0.72em; letter-spacing: 0.08em; }
 
-.pc-swipe {
-  display: flex;
-  width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scroll-snap-type: x mandatory;
-  scrollbar-width: none;
-  -webkit-overflow-scrolling: touch;
-}
-.pc-swipe::-webkit-scrollbar { display: none; }
-.pc-page {
-  flex: 0 0 100%;
-  min-width: 100%;
-  scroll-snap-align: center;
-  scroll-snap-stop: always;
-}
-/* every play on the page — wraps instead of paging, so nothing is hidden */
-.pc-plays {
+/* ---- playcall: formations grid on top, plays grid below --------------- */
+.pc-forms {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  align-content: flex-start;
-  gap: clamp(5px, 1vw, 10px);
-  padding: 2px clamp(6px, 1.5vw, 14px);
-  max-height: clamp(150px, 34vh, 300px);
-  overflow-y: auto;
+  gap: clamp(4px, 0.8vw, 8px);
+  width: 100%;
+  max-width: 1120px;
+  margin-bottom: clamp(5px, 1vh, 10px);
 }
-.pc-plays .pc-card {
-  flex: 0 0 auto;
-  width: clamp(84px, 13vw, 132px);
-  max-width: none;
-}
-.pc-dots { display: flex; justify-content: center; gap: 6px; margin-top: 6px; }
-.pc-dot {
-  width: 7px; height: 7px; padding: 0;
-  border-radius: 50%;
-  border: 1px solid rgba(200, 216, 255, 0.5);
-  background: transparent;
+.pc-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: clamp(4px, 0.9vh, 8px) clamp(8px, 1.4vw, 14px);
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(20, 30, 54, 0.9);
+  color: #cfd8ee;
   cursor: pointer;
+  line-height: 1.05;
 }
-.pc-dot.on { background: #ffe600; border-color: #ffe600; }
+.pc-form.on {
+  background: #2a6df4;
+  border-color: #7fb0ff;
+  color: #fff;
+}
+.pf-name { font-weight: 800; font-size: clamp(10px, 1.7vh, 14px); letter-spacing: 0.04em; }
+.pf-tag { font-size: clamp(7px, 1.1vh, 10px); opacity: 0.7; letter-spacing: 0.06em; }
+
+.pc-plays {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(clamp(88px, 12vw, 130px), 1fr));
+  gap: clamp(5px, 1vw, 10px);
+  width: 100%;
+  max-width: 1120px;
+  max-height: clamp(150px, 40vh, 340px);
+  overflow-y: auto;
+  align-content: start;
+  padding-bottom: 2px;
+}
+/* the cards size to the grid cell now, not to a fixed strip width */
+.pc-plays .pc-card { width: auto; min-width: 0; max-width: none; flex: none; }

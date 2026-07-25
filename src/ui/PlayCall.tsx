@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { OFFENSE_BASE } from "../game/plays";
 import type {
   DefenseFormation,
@@ -20,34 +20,18 @@ export function PlayCall({
   onPick: (formationId: string, playId: string) => void;
 }) {
   const [idx, setIdx] = useState(0);
-  const trackRef = useRef<HTMLDivElement | null>(null);
   const i = Math.min(idx, formations.length - 1);
   const formation = formations[i];
+  const plays = (formation?.plays ?? []) as AnyPlay[];
 
-  // scroll-snap does the swiping natively (momentum, rubber-banding, snap);
-  // we only read back WHICH formation is centred so the header + dots match.
-  const onScroll = () => {
-    const el = trackRef.current;
-    if (!el) return;
-    const w = el.clientWidth || 1;
-    const n = Math.round(el.scrollLeft / w);
-    if (n !== idx) setIdx(Math.max(0, Math.min(formations.length - 1, n)));
-  };
-  const goTo = (n: number) => {
-    const el = trackRef.current;
-    const c = Math.max(0, Math.min(formations.length - 1, n));
-    setIdx(c);
-    el?.scrollTo({ left: c * (el.clientWidth || 0), behavior: "smooth" });
-  };
-
-  // keyboard mirrors the swipe: arrows change formation, digits call a play
+  // everything is on one screen: formations across the top, that formation's
+  // plays in the grid below. Arrows/digits mirror it for keyboard.
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (e.key === "ArrowLeft") return goTo(i - 1);
-      if (e.key === "ArrowRight") return goTo(i + 1);
+      if (e.key === "ArrowLeft") return setIdx(Math.max(0, i - 1));
+      if (e.key === "ArrowRight") return setIdx(Math.min(formations.length - 1, i + 1));
       const n = parseInt(e.key, 10);
-      const plays = formation?.plays as AnyPlay[] | undefined;
-      if (plays && n >= 1 && n <= plays.length) onPick(formation.id, plays[n - 1].id);
+      if (formation && n >= 1 && n <= plays.length) onPick(formation.id, plays[n - 1].id);
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
@@ -55,56 +39,40 @@ export function PlayCall({
 
   return (
     <div className="overlay playcall">
-      <div className="pc-head">
-        <button className="pc-arrow" disabled={i === 0} onClick={() => goTo(i - 1)}>
-          ‹
-        </button>
-        <div className="pc-title sm">
-          {formation?.name}
-          <span className="pc-tag">{formation?.tag}</span>
-        </div>
-        <button
-          className="pc-arrow"
-          disabled={i >= formations.length - 1}
-          onClick={() => goTo(i + 1)}
-        >
-          ›
-        </button>
-      </div>
-
-      {/* one page per formation — every play on it is visible, no drilling in */}
-      <div className="pc-swipe" ref={trackRef} onScroll={onScroll}>
-        {formations.map((f) => (
-          <div className="pc-page" key={f.id}>
-            <div className="pc-plays">
-              {(f.plays as AnyPlay[]).map((p, n) => (
-                <button
-                  key={p.id}
-                  className="pc-card"
-                  onClick={() => onPick(f.id, p.id)}
-                >
-                  <span className="pc-key">{n + 1}</span>
-                  <PlayArt play={p} formation={f} offense={onOffense} />
-                  <span className="pc-name">{p.name}</span>
-                  <span className="pc-kind">{kindLabel(p, onOffense)}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="pc-dots">
+      {/* FORMATIONS: all of them, in a grid — tap to swap the play grid below.
+          No second page, so you never lose sight of what you're choosing. */}
+      <div className="pc-forms">
         {formations.map((f, n) => (
           <button
             key={f.id}
-            className={`pc-dot${n === i ? " on" : ""}`}
-            onClick={() => goTo(n)}
-            aria-label={f.name}
-          />
+            className={`pc-form${n === i ? " on" : ""}`}
+            onClick={() => setIdx(n)}
+          >
+            <span className="pf-name">{f.name}</span>
+            <span className="pf-tag">{f.tag}</span>
+          </button>
         ))}
       </div>
-      <div className="pc-hint">Swipe for another formation · tap a play to run it</div>
+
+      {/* PLAYS: a real grid that fills the width and wraps down the screen */}
+      <div className="pc-plays">
+        {plays.map((p, n) => (
+          <button
+            key={p.id}
+            className="pc-card"
+            onClick={() => formation && onPick(formation.id, p.id)}
+          >
+            <span className="pc-key">{n + 1}</span>
+            <PlayArt play={p} formation={formation} offense={onOffense} />
+            <span className="pc-name">{p.name}</span>
+            <span className="pc-kind">{kindLabel(p, onOffense)}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="pc-hint">
+        {onOffense ? "Tap a play to run it" : "Tap a call to run it"}
+      </div>
     </div>
   );
 }
