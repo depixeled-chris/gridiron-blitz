@@ -279,6 +279,7 @@ export class Game {
     // winner receives -> the LOSER kicks off, so possession starts with the kicker
     const receiving: Team = userWon ? this.userTeam : this.userTeam === "home" ? "away" : "home";
     this.kickingTeam = receiving === "home" ? "away" : "home";
+    this.openingKicker = this.kickingTeam; // the halves swap off this
     this.message = `${flip.toUpperCase()} — ${userWon ? "YOU" : "CPU"} RECEIVE`;
     this.pushHud(true);
     this.openingKickoff = true;
@@ -3694,6 +3695,11 @@ export class Game {
   private tossResult: { flip: "heads" | "tails"; userWon: boolean } | null = null;
   private openingKickoff = false;
   private kickingTeam: Team = "away";
+  /** who kicked off to open the GAME — the second half flips it, so whoever
+   *  kicked to start the game receives to start the third quarter */
+  private openingKicker: Team = "away";
+  /** a half just ended: the next play is the second-half kickoff */
+  private halftimeKickoff = false;
   /** this play is a KICKOFF RETURN: it ends in a fresh series for the returner's
    *  team at the spot, not in down-and-distance bookkeeping */
   private kickReturn = false;
@@ -3720,6 +3726,13 @@ export class Game {
       this.recomputeFirstDown();
       this.message = "POINT AFTER";
       this.goToPlaycall();
+      return;
+    }
+    if (this.halftimeKickoff) {
+      // second-half kickoff: the team that RECEIVED to open the game kicks it
+      this.halftimeKickoff = false;
+      this.pendingKickoff = null;
+      this.startKickoff(this.openingKicker === "home" ? "away" : "home");
       return;
     }
     if (this.pendingKickoff) {
@@ -3751,7 +3764,14 @@ export class Game {
       // let current play finish; gameover handled in afterPlay
     } else {
       this.clock = QUARTER_SECONDS;
-      this.message = `END OF Q${this.quarter - 1}`;
+      // HALFTIME: the second half opens with a kickoff, and it's the other way
+      // round — whoever kicked off to start the game receives now.
+      if (this.quarter === 3) {
+        this.halftimeKickoff = true;
+        this.message = "HALFTIME";
+      } else {
+        this.message = `END OF Q${this.quarter - 1}`;
+      }
     }
   }
 
