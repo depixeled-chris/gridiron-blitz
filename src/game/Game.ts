@@ -152,6 +152,8 @@ export class Game {
   private kickSnapTime = 0.6;
   /** this snap is getting away from the snapper (rolled at the snap) */
   private kickBadSnap = false;
+  /** why the last pass died — survives endPlay's generic "INCOMPLETE" stamp */
+  private deadReason = "";
   // point-after state: a try is pending after a TD; conversion is the active attempt
   private tryPending = false;
   private tryMode = false;
@@ -1096,6 +1098,7 @@ export class Game {
     b.elapsed = 0;
     b.tip = false;
     b.fumble = false;
+    b.deadBall = false;
     b.swatDone = false; // one in-flight deflection attempt per kick
     b.inAir = false; // the KICK hasn't launched; the operation is running
     this.kickOp = "snap";
@@ -2605,6 +2608,7 @@ export class Game {
     b.elapsed = 0;
     b.tip = false;
     b.fumble = false;
+    b.deadBall = false;
     b.swatDone = false;
     const throwDist = dist(qb.x, qb.y, landX, landY);
     b.ftime = Math.max(0.32, throwDist / speed);
@@ -2646,6 +2650,16 @@ export class Game {
     b.x = lerp(b.sx, b.tx, b.t);
     b.y = lerp(b.sy, b.ty, b.t);
 
+    if (b.deadBall) {
+      // dead ball skipping across the turf: a couple of decaying hops so the
+      // incompletion has a physical beat instead of the ball blinking out
+      b.x = lerp(b.sx, b.tx, b.t);
+      b.y = lerp(b.sy, b.ty, b.t);
+      b.z = b.peak * Math.abs(Math.sin(Math.PI * b.t * 2)) * (1 - b.t);
+      if (b.t >= 1) this.deadBallSettled();
+      return;
+    }
+
     if (b.tip) {
       // loose ball after a tip/fumble: low arc, live for both teams
       b.z = b.peak * Math.sin(Math.PI * b.t);
@@ -2653,7 +2667,7 @@ export class Game {
       if (this.ball.inAir && b.t >= 1) {
         // hit the turf: a tipped pass is incomplete, a fumble is dead at the spot
         if (b.fumble) this.fumbleDead();
-        else this.incomplete();
+        else this.incomplete("INCOMPLETE", null, 0.6); // the tip hit the turf
       }
       return;
     }
@@ -2668,7 +2682,7 @@ export class Game {
     // (RELEASE zone: batted at the line) and dropping into the catch (LANDING
     // zone: jump ball) — and false through the high middle of the flight.
     if (b.z > REACH) {
-      if (b.t >= 1) this.incomplete();
+      if (b.t >= 1) this.incomplete("OVERTHROWN", null, 1.1);
       return; // sailing high over everyone
     }
 
@@ -2712,7 +2726,7 @@ export class Game {
       if (nd && ndDist <= CATCH_AREA) {
         return this.resolveDefenderBall(nd, target, ndDist);
       }
-      if (b.t >= 1) this.incomplete();
+      if (b.t >= 1) this.incomplete("INCOMPLETE", null, 1.1); // fell in space
       return;
     }
 
@@ -2776,13 +2790,20 @@ export class Game {
     });
     if (res.win) {
       const drop = clamp((90 - atk) / 320, 0.01, 0.11);
-      return rng() < drop ? this.incomplete() : this.completePass(rec);
+      // he had it and lost it: the ball pops UP off his hands and dies at his
+      // feet, so a drop looks like a drop and never like a defensive play
+      return rng() < drop
+        ? this.incomplete("DROPPED!", rec, 1.5)
+        : this.completePass(rec);
     }
     // a loss is almost always a break-up; a pick only when the DB decisively won
     // (extreme) AND was right at the ball — kept rare (NFL INT ~2.3%/att; the
     // generous receiver-reach was over-producing picks at ~6-7%).
     if (nd && res.extreme && sep < 0.7 && rng() < 0.5) return this.interception(nd);
-    return nd && rng() < 0.1 ? this.startTip(nd) : this.incomplete();
+    if (nd && rng() < 0.1) return this.startTip(nd); // tipped up, still live
+    return nd
+      ? this.incomplete("BROKEN UP!", nd, 0.8) // swatted away by the defender
+      : this.incomplete("BOBBLED!", rec, 1.3); // nobody there — he mishandled it
   }
 
   /** a defender truly undercut the route (no receiver at the ball) */
@@ -2797,7 +2818,7 @@ export class Game {
       leverage: clamp((2 - ndDist / YARD) * 8, 0, 16),
     });
     if (res.win && res.extreme) return this.interception(nd); // cleanly picked
-    return this.incomplete(); // off-target throw knocked away — no play
+    return this.incomplete("BROKEN UP!", nd, 0.8); // knocked away by the defender
   }
 
   /** a deflected ball is LIVE for both teams — but securing it is an
@@ -2930,6 +2951,7 @@ export class Game {
     b.inAir = false;
     b.tip = false;
     b.fumble = false;
+    b.deadBall = false;
     b.targetId = null;
     b.z = 0;
     r.hasBall = true;
@@ -2942,18 +2964,60 @@ export class Game {
     this.audio.catchBall();
   }
 
-  private incomplete() {
+  /** Kill the pass VISIBLY: the ball kicks off whatever ended it and bounces on
+   * the turf, with a message saying what happened. `off` is the man who caused
+   * it (defender who swatted / receiver who dropped) — the ball caroms away
+   * from him, so the swat reads as a swat and the drop reads as a drop. */
+  private incomplete(reason = "INCOMPLETE", off: Player | null = null, pop = 0.9) {
+    const b = this.ball;
+    if (b.deadBall) return; // already dying — don't restart the bounce
+    b.tip = false;
+    b.fumble = false;
+    b.targetId = null;
+    b.inAir = true; // still a physical object until it settles
+    b.deadBall = true;
+    b.sx = b.x;
+    b.sy = b.y;
+    // caroms AWAY from the man who broke it up; a clean drop falls at his feet
+    let ax = (rng() - 0.5) * 2;
+    let ay = (rng() - 0.5) * 2;
+    if (off) {
+      const dx = b.x - off.x;
+      const dy = b.y - off.y;
+      const m = Math.hypot(dx, dy) || 1;
+      ax = dx / m + (rng() - 0.5) * 0.6;
+      ay = dy / m + (rng() - 0.5) * 0.6;
+    }
+    const kick = (1.2 + rng() * 1.6) * YARD;
+    b.tx = clamp(b.x + ax * kick, LEFT_GOAL - 20, RIGHT_GOAL + 20);
+    b.ty = clamp(b.y + ay * kick, SIDELINE, WORLD_H - SIDELINE);
+    b.peak = pop * YARD;
+    b.ftime = 0.55;
+    b.elapsed = 0;
+    b.t = 0;
+    this.message = reason;
+    this.deadReason = reason;
+    this.audio.tackle();
+  }
+
+  /** the ball has stopped bouncing — now blow the whistle */
+  private deadBallSettled() {
     this.ball.inAir = false;
-    this.ball.tip = false;
-    this.ball.fumble = false;
-    this.ball.targetId = null;
+    this.ball.deadBall = false;
+    this.ball.z = 0;
     this.endPlay({ type: "incomplete" });
+    // endPlay stamps a generic "INCOMPLETE"; put the REASON back so the reason
+    // for the incompletion survives the whistle (but never clobber a
+    // turnover-on-downs / first-down message)
+    if (this.message === "INCOMPLETE" && this.deadReason) this.message = this.deadReason;
+    this.deadReason = "";
   }
 
   private interception(by: Player) {
     this.ball.inAir = false;
     this.ball.tip = false;
     this.ball.fumble = false;
+    this.ball.deadBall = false;
     this.ball.targetId = null;
     this.ball.z = 0;
     this.message = "INTERCEPTED!";
@@ -3433,11 +3497,15 @@ export class Game {
       s.c.x = p.x;
       s.c.y = p.y;
       s.ring.visible = p.id === this.controlledId && this.phase !== "playcall";
+      // Chips stay up until the ball is CAUGHT or the next play starts — they
+      // used to vanish the instant the QB let go, which is exactly when you
+      // need them to read who the throw was for and what happened to it.
+      const caught = !!this.ball.carrier && !this.ball.carrier.endsWith("_QB");
       const showLabel =
-        this.phase === "live" &&
+        (this.phase === "live" || this.phase === "dead") &&
         this.userOnOffense() &&
         this.offPlay.kind === "pass" &&
-        this.ball.carrier?.endsWith("_QB") === true &&
+        !caught &&
         !!p.target;
       s.label.visible = !!showLabel;
       s.labelBg.visible = !!showLabel;
@@ -3775,6 +3843,7 @@ function freshBall(): BallState {
     peak: 0,
     tip: false,
     fumble: false,
+    deadBall: false,
     swatDone: false,
   };
 }

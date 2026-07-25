@@ -199,6 +199,11 @@ export interface BallState {
   /** the loose ball is a FUMBLE, not a pass: unrecovered = dead at the spot
    *  (offense keeps it), not an incompletion */
   fumble: boolean;
+  /** the pass is DEAD and physically hitting the turf — the ball kicks away
+   *  from whatever killed it and bounces out. Nobody can play it; the whistle
+   *  comes when it settles. This is what makes an incompletion readable:
+   *  you see the swat, the drop, the bounce — not a ball that blinks out. */
+  deadBall: boolean;
   /** one-shot latch: a line defender already got his single deflection attempt this throw */
   swatDone: boolean;
 }
