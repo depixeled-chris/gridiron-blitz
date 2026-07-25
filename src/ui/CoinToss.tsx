@@ -4,7 +4,7 @@ import type { Wind } from "../game/types";
 type Toss = {
   flip: "heads" | "tails";
   userWon: boolean;
-  choice: "receive" | "wind" | null;
+  choice: "receive" | "kick" | null;
   wind: Wind;
 };
 
@@ -18,7 +18,7 @@ export function CoinToss({
 }: {
   result: Toss | null;
   onCall: (pick: "heads" | "tails") => void;
-  onElect: (choice: "receive" | "wind") => void;
+  onElect: (choice: "receive" | "kick") => void;
   onContinue: () => void;
 }) {
   const [spin, setSpin] = useState(false);
@@ -68,18 +68,18 @@ export function CoinToss({
                   <button className="toss-btn" onClick={() => onElect("receive")}>
                     RECEIVE
                   </button>
-                  <button className="toss-btn" onClick={() => onElect("wind")}>
-                    TAKE WIND
+                  <button className="toss-btn" onClick={() => onElect("kick")}>
+                    KICK
                   </button>
                 </div>
               </>
             ) : (
               <>
                 <div className="toss-elect">
-                  {result.choice === "wind"
+                  {result.choice === "kick"
                     ? result.userWon
-                      ? "You take the wind — they receive"
-                      : "CPU takes the wind — you receive"
+                      ? "You kick off — they receive"
+                      : "CPU kicks off — you receive"
                     : result.userWon
                       ? "You receive"
                       : "CPU receives"}

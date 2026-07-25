@@ -287,14 +287,19 @@ export class Game {
     this.tossResult = { flip, userWon };
     this.message = `${flip.toUpperCase()} — ${userWon ? "YOU WIN" : "CPU WINS"} THE TOSS`;
     if (!userWon) {
-      // CPU elects: it takes the wind when it's genuinely strong, else the ball
-      this.electToss(this.wind.mph >= 12 ? "wind" : "receive", false);
+      // CPU elects: with a strong wind at its back it kicks off (pin them deep
+      // and get the ball back with the wind still helping); otherwise it takes
+      // the ball.
+      const cpu: Team = this.userTeam === "home" ? "away" : "home";
+      const cpuDir = cpu === "home" ? 1 : -1;
+      const backing = this.wind.mph >= 12 && this.wind.dir === cpuDir;
+      this.electToss(backing ? "kick" : "receive", false);
     }
     this.pushHud(true);
   }
 
-  /** the toss winner's election: take the ball, or take the wind */
-  electToss(choice: "receive" | "wind", byUser = true) {
+  /** the toss winner's election: RECEIVE the kickoff, or KICK it off */
+  electToss(choice: "receive" | "kick", byUser = true) {
     if (this.phase !== "toss" || !this.tossResult) return;
     if (byUser && !this.tossResult.userWon) return;
     const winner: Team = this.tossResult.userWon
@@ -303,21 +308,13 @@ export class Game {
         ? "away"
         : "home";
     const loser: Team = winner === "home" ? "away" : "home";
-    let receiving: Team;
-    if (choice === "receive") {
-      receiving = winner;
-    } else {
-      // take the wind: set it at the winner's back for the whole game, and let
-      // the other side have the ball first
-      receiving = loser;
-      this.wind.dir = winner === "home" ? 1 : -1;
-    }
+    const receiving: Team = choice === "receive" ? winner : loser;
     this.kickingTeam = receiving === "home" ? "away" : "home";
     this.openingKicker = this.kickingTeam; // the halves swap off this
     this.tossChoice = choice;
     this.message =
-      choice === "wind"
-        ? `${this.tossResult.userWon ? "YOU TAKE" : "CPU TAKES"} THE WIND`
+      choice === "kick"
+        ? `${this.tossResult.userWon ? "YOU KICK" : "CPU KICKS"} OFF`
         : `${this.tossResult.userWon ? "YOU RECEIVE" : "CPU RECEIVES"}`;
     this.openingKickoff = true;
     this.pushHud(true);
@@ -3778,7 +3775,7 @@ export class Game {
    *  this used to be decided by comparing this.message to "SAFETY!". */
   private pendingKickoff: "flip" | "keep" | null = null;
   private tossResult: { flip: "heads" | "tails"; userWon: boolean } | null = null;
-  private tossChoice: "receive" | "wind" | null = null;
+  private tossChoice: "receive" | "kick" | null = null;
   private openingKickoff = false;
   private kickingTeam: Team = "away";
   /** who kicked off to open the GAME — the second half flips it, so whoever

@@ -5,6 +5,7 @@ import { Scoreboard } from "./ui/Scoreboard";
 import { PlayCall } from "./ui/PlayCall";
 import { Menu } from "./ui/Menu";
 import { CoinToss } from "./ui/CoinToss";
+import { WindSock } from "./ui/WindSock";
 import { GameOver } from "./ui/GameOver";
 import { Controls } from "./ui/Controls";
 import { TouchControls } from "./ui/TouchControls";
@@ -103,6 +104,9 @@ export function App() {
           </button>
         )}
 
+        {hud.phase !== "menu" && hud.phase !== "gameover" && (
+          <WindSock wind={hud.wind} />
+        )}
         {hud.phase === "menu" && <Menu onStart={() => game?.startGame()} />}
         {hud.phase === "toss" && game && (
           <CoinToss
