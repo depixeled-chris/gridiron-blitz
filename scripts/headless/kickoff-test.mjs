@@ -2,7 +2,7 @@ import { pathToFileURL } from "url";
 const { Game } = await import(pathToFileURL(process.argv[2]).href);
 const DT=1/60, YARD=22;
 
-function kickoff(koPlay, N=60){
+function kickoff(koPlay, N=250){
   const carries=[], out={recovered:0, returned:0, other:0};
   for(let i=0;i<N;i++){
     const g=new Game(); g.setHeadless(true); g.startGame(); g.callToss("heads");

@@ -878,6 +878,13 @@ export class Game {
       const laneY = clamp(midY + this.returnLane * 6 * YARD, SIDELINE, WORLD_H - SIDELINE);
       for (const d of defenders) {
         const deep = d.id.endsWith("_RET") || d.defRole === "S";
+        // the RETURNER sets up on the called side, so he fields it there and
+        // runs up that lane behind his wall — the call moves the man, not just
+        // the blockers in front of him
+        if (d.id.endsWith("_RET") && this.returnLane !== 0) {
+          d.oy = clamp(d.oy + this.returnLane * 5 * YARD, SIDELINE, WORLD_H - SIDELINE);
+          d.y = d.oy;
+        }
         d.job = "zone";
         d.zone = deep
           ? { x: d.ox, y: d.oy }
@@ -1255,6 +1262,7 @@ export class Game {
     // recovery for the receiving side.
     if (this.kickoffKind === "onside") {
       b.ftime = 1.75 + rng() * 0.35;
+      this.onsideLoose = 0;
       for (const p of this.players) p.tipTried = false; // fresh scramble
     }
     if (this.kickoffKind === "squib") b.ftime = Math.max(0.9, b.ftime * 0.75);
@@ -1328,10 +1336,32 @@ export class Game {
           return;
         }
       }
-      if (b.t >= 1 && b.z <= 0.1) {
-        // nobody fell on it — the return team is awarded it where it stopped
-        const near = this.nearestReturner(b.x, b.y);
-        if (near) return this.fieldKickoff(near);
+      // It's a LOOSE BALL on the ground now, not instantly dead. Give the pile
+      // a beat to converge — this window is the whole play. (The award used to
+      // fire the same frame it landed, so the contest above almost never ran
+      // and the ball was simply handed to whoever happened to be standing
+      // nearest: the hands team, every time.)
+      if (b.t >= 1) {
+        b.z = 0;
+        this.onsideLoose += dt;
+        if (this.onsideLoose > 0.8) {
+          let best: Player | null = null;
+          let bd = Infinity;
+          for (const p of this.players) {
+            if (p.stun > 0) continue;
+            if (p.team === this.possession && gone < 10) continue;
+            const d = dist(p.x, p.y, b.x, b.y);
+            if (d < bd) {
+              bd = d;
+              best = p;
+            }
+          }
+          if (best) {
+            const kickingRecovered = best.team === this.possession;
+            this.fieldKickoff(best);
+            this.message = kickingRecovered ? "ONSIDE RECOVERED!" : "RETURN TEAM BALL";
+          }
+        }
       }
       return;
     }
@@ -3977,6 +4007,8 @@ export class Game {
   /** -1 left / 0 middle / +1 right — the kicker's aim and the return's lane */
   private kickoffAim = 0;
   private returnLane = 0;
+  /** seconds an onside kick has been loose on the ground */
+  private onsideLoose = 0;
   /** seconds until the teed kickoff is struck */
   private kickoffWait = 0;
 
