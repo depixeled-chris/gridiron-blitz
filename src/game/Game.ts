@@ -94,6 +94,8 @@ interface Sprite {
   c: Container;
   body: Graphics;
   ring: Graphics;
+  /** impact flash: marks the man who just played the ball (swat/drop/tip) */
+  fx: Graphics;
   num: Text;
   label: Text;
   labelBg: Graphics;
@@ -951,6 +953,8 @@ export class Game {
       p.stun = 0;
       p.engaged = 0;
       p.burst = 0;
+      p.fx = 0;
+      p.fxKind = "";
     }
     this.pressJam();
     const offTeam = this.possession;
@@ -1099,6 +1103,7 @@ export class Game {
     b.tip = false;
     b.fumble = false;
     b.deadBall = false;
+    b.offTarget = false;
     b.swatDone = false; // one in-flight deflection attempt per kick
     b.inAir = false; // the KICK hasn't launched; the operation is running
     this.kickOp = "snap";
@@ -1583,6 +1588,7 @@ export class Game {
       p.blocked = false;
       if (p.stun > 0) p.stun = Math.max(0, p.stun - dt);
       if (p.burst > 0) p.burst = Math.max(0, p.burst - dt);
+      if (p.fx > 0) p.fx = Math.max(0, p.fx - dt);
     }
     this.updateSeparation();
 
@@ -1709,7 +1715,10 @@ export class Game {
       // loose ball; others keep running their routes.
       if (ballLoose) {
         if (p.id === this.ball.targetId || (this.ball.tip)) {
-          this.moveToward(p, this.ball.tx, this.ball.ty, dt, 1);
+          // a MISFIRE is behind/away from him: he has to break down, turn and
+          // work back, so he frequently can't get there — the ball lands in
+          // space and reads as a bad throw
+          this.moveToward(p, this.ball.tx, this.ball.ty, dt, this.ball.offTarget ? 0.6 : 1);
         } else if (p.route && p.routeIdx < p.route.length) {
           this.followRoute(p, dt);
         }
@@ -2590,6 +2599,20 @@ export class Game {
     const lf = 0.82;
     let landX = r.x + hx * ft * lf + (rng() - 0.5) * 2 * scatter;
     let landY = r.y + hy * ft * lf + (rng() - 0.5) * 2 * scatter;
+    // MISFIRE TAIL: the per-throw scatter above is tight (sub-yard at league
+    // accuracy), so on its own a QB is never visibly WRONG — every incompletion
+    // had to be a swat or a drop. Real QBs are mostly accurate with an
+    // occasional genuine miss: sail it, short-arm it, throw behind him. That
+    // miss lands well outside everyone's reach, so it resolves as a badly
+    // thrown ball — the ball skipping away in space with nobody near it.
+    const misfire = clamp(0.1 + (75 - acc) * 0.004 + onRun * 0.6, 0.03, 0.3);
+    const badThrow = rng() < misfire;
+    if (badThrow) {
+      const ang = rng() * Math.PI * 2;
+      const off = (2.6 + rng() * 3) * YARD;
+      landX += Math.cos(ang) * off;
+      landY += Math.sin(ang) * off;
+    }
     landX = clamp(landX, LEFT_GOAL - 20, RIGHT_GOAL + 20);
     landY = clamp(landY, SIDELINE + 1.5 * YARD, WORLD_H - SIDELINE - 1.5 * YARD);
 
@@ -2609,6 +2632,7 @@ export class Game {
     b.tip = false;
     b.fumble = false;
     b.deadBall = false;
+    b.offTarget = badThrow;
     b.swatDone = false;
     const throwDist = dist(qb.x, qb.y, landX, landY);
     b.ftime = Math.max(0.32, throwDist / speed);
@@ -2667,7 +2691,7 @@ export class Game {
       if (this.ball.inAir && b.t >= 1) {
         // hit the turf: a tipped pass is incomplete, a fumble is dead at the spot
         if (b.fumble) this.fumbleDead();
-        else this.incomplete("INCOMPLETE", null, 0.6); // the tip hit the turf
+        else this.incomplete("loose"); // the tip hit the turf
       }
       return;
     }
@@ -2682,7 +2706,7 @@ export class Game {
     // (RELEASE zone: batted at the line) and dropping into the catch (LANDING
     // zone: jump ball) — and false through the high middle of the flight.
     if (b.z > REACH) {
-      if (b.t >= 1) this.incomplete("OVERTHROWN", null, 1.1);
+      if (b.t >= 1) this.incomplete("badthrow"); // sailed high over everyone
       return; // sailing high over everyone
     }
 
@@ -2726,7 +2750,7 @@ export class Game {
       if (nd && ndDist <= CATCH_AREA) {
         return this.resolveDefenderBall(nd, target, ndDist);
       }
-      if (b.t >= 1) this.incomplete("INCOMPLETE", null, 1.1); // fell in space
+      if (b.t >= 1) this.incomplete("badthrow"); // landed in space — nobody was there
       return;
     }
 
@@ -2793,7 +2817,7 @@ export class Game {
       // he had it and lost it: the ball pops UP off his hands and dies at his
       // feet, so a drop looks like a drop and never like a defensive play
       return rng() < drop
-        ? this.incomplete("DROPPED!", rec, 1.5)
+        ? this.incomplete("drop", rec)
         : this.completePass(rec);
     }
     // a loss is almost always a break-up; a pick only when the DB decisively won
@@ -2802,8 +2826,8 @@ export class Game {
     if (nd && res.extreme && sep < 0.7 && rng() < 0.5) return this.interception(nd);
     if (nd && rng() < 0.1) return this.startTip(nd); // tipped up, still live
     return nd
-      ? this.incomplete("BROKEN UP!", nd, 0.8) // swatted away by the defender
-      : this.incomplete("BOBBLED!", rec, 1.3); // nobody there — he mishandled it
+      ? this.incomplete("swat", nd) // swatted away by the defender
+      : this.incomplete("bobble", rec); // nobody there — he mishandled it
   }
 
   /** a defender truly undercut the route (no receiver at the ball) */
@@ -2818,7 +2842,10 @@ export class Game {
       leverage: clamp((2 - ndDist / YARD) * 8, 0, 16),
     });
     if (res.win && res.extreme) return this.interception(nd); // cleanly picked
-    return this.incomplete("BROKEN UP!", nd, 0.8); // knocked away by the defender
+    // If the THROW was the problem, a defender standing near where it landed
+    // didn't break anything up — the ball was never catchable. Credit the miss.
+    if (this.ball.offTarget) return this.incomplete("badthrow");
+    return this.incomplete("swat", nd); // knocked away by the defender
   }
 
   /** a deflected ball is LIVE for both teams — but securing it is an
@@ -2882,6 +2909,8 @@ export class Game {
     b.ftime = 0.6;
     b.elapsed = 0;
     b.t = 0;
+    by.fx = 0.9;
+    by.fxKind = "tip";
     this.message = "TIPPED!";
     this.audio.tackle();
   }
@@ -2968,9 +2997,29 @@ export class Game {
    * the turf, with a message saying what happened. `off` is the man who caused
    * it (defender who swatted / receiver who dropped) — the ball caroms away
    * from him, so the swat reads as a swat and the drop reads as a drop. */
-  private incomplete(reason = "INCOMPLETE", off: Player | null = null, pop = 0.9) {
+  /** Kill the pass VISIBLY. Each cause gets its own PHYSICAL signature — how
+   * fast the ball leaves, how high it pops, how far it travels, and who lights
+   * up — so you can read what happened from the motion alone, without the text:
+   *   swat     a hard, flat, long carom AWAY from the defender (he flashes)
+   *   drop     a high floaty pop straight UP off the hands, dead at his feet
+   *   bobble   a short muffed pop with nobody near him
+   *   badthrow no contact at all — it skips away in space, NOBODY flashes,
+   *            which is itself the tell: the throw simply missed everyone
+   */
+  private incomplete(
+    kind: "swat" | "drop" | "bobble" | "badthrow" | "loose" = "loose",
+    off: Player | null = null
+  ) {
     const b = this.ball;
     if (b.deadBall) return; // already dying — don't restart the bounce
+    const SIG = {
+      swat: { pop: 0.45, ftime: 0.42, kick: 3.2, msg: "BROKEN UP!", fx: "swat" },
+      drop: { pop: 2.0, ftime: 0.75, kick: 0.35, msg: "DROPPED!", fx: "drop" },
+      bobble: { pop: 1.3, ftime: 0.6, kick: 0.9, msg: "BOBBLED!", fx: "drop" },
+      badthrow: { pop: 0.9, ftime: 0.8, kick: 2.6, msg: "BADLY THROWN", fx: "" },
+      loose: { pop: 0.8, ftime: 0.55, kick: 1.4, msg: "INCOMPLETE", fx: "" },
+    }[kind];
+
     b.tip = false;
     b.fumble = false;
     b.targetId = null;
@@ -2978,7 +3027,7 @@ export class Game {
     b.deadBall = true;
     b.sx = b.x;
     b.sy = b.y;
-    // caroms AWAY from the man who broke it up; a clean drop falls at his feet
+    // caroms AWAY from the man who ended it; a drop just falls at his feet
     let ax = (rng() - 0.5) * 2;
     let ay = (rng() - 0.5) * 2;
     if (off) {
@@ -2988,15 +3037,20 @@ export class Game {
       ax = dx / m + (rng() - 0.5) * 0.6;
       ay = dy / m + (rng() - 0.5) * 0.6;
     }
-    const kick = (1.2 + rng() * 1.6) * YARD;
+    const kick = SIG.kick * (0.7 + rng() * 0.6) * YARD;
     b.tx = clamp(b.x + ax * kick, LEFT_GOAL - 20, RIGHT_GOAL + 20);
     b.ty = clamp(b.y + ay * kick, SIDELINE, WORLD_H - SIDELINE);
-    b.peak = pop * YARD;
-    b.ftime = 0.55;
+    b.peak = SIG.pop * YARD;
+    b.ftime = SIG.ftime;
     b.elapsed = 0;
     b.t = 0;
-    this.message = reason;
-    this.deadReason = reason;
+    // light up the man who played it — the non-textual "who did that"
+    if (off && SIG.fx) {
+      off.fx = 0.9;
+      off.fxKind = SIG.fx as "swat" | "drop";
+    }
+    this.message = SIG.msg;
+    this.deadReason = SIG.msg;
     this.audio.tackle();
   }
 
@@ -3497,6 +3551,20 @@ export class Game {
       s.c.x = p.x;
       s.c.y = p.y;
       s.ring.visible = p.id === this.controlledId && this.phase !== "playcall";
+      // impact flash — expands + fades, colour says what kind of play it was:
+      // a defensive play on the ball (swat/tip) vs an offensive gaffe (drop)
+      if (p.fx > 0) {
+        const k = 1 - p.fx / 0.9; // 0 at contact -> 1 as it fades
+        const col = p.fxKind === "drop" ? 0xff5a4d : 0x6fd8ff;
+        s.fx.clear();
+        s.fx
+          .circle(0, 0, 12 + k * 20)
+          .stroke({ width: 3.5 * (1 - k), color: col, alpha: 0.95 * (1 - k) });
+        s.fx.visible = true;
+      } else if (s.fx.visible) {
+        s.fx.clear();
+        s.fx.visible = false;
+      }
       // Chips stay up until the ball is CAUGHT or the next play starts — they
       // used to vanish the instant the QB let go, which is exactly when you
       // need them to read who the throw was for and what happened to it.
@@ -3630,6 +3698,10 @@ export class Game {
       .circle(0, 0, 14)
       .stroke({ width: 2.5, color: COLORS.highlight, alpha: 0.95 });
     ring.visible = false;
+    // impact flash — expands and fades on the man who just touched the ball,
+    // so WHO made the play is visible without reading a word
+    const fx = new Graphics();
+    fx.visible = false;
 
     const isHome = p.team === "home";
     const fill = isHome ? COLORS.home : COLORS.away;
@@ -3684,11 +3756,11 @@ export class Game {
     label.y = LBY;
     label.visible = false;
 
-    c.addChild(shadow, ring, body, num, labelBg, label);
+    c.addChild(shadow, ring, fx, body, num, labelBg, label);
     c.x = p.x;
     c.y = p.y;
     this.world.addChild(c);
-    this.sprites.set(p.id, { c, body, ring, num, label, labelBg });
+    this.sprites.set(p.id, { c, body, ring, fx, num, label, labelBg });
   }
 
   // ---- field & overlay drawing ------------------------------------------
@@ -3808,6 +3880,8 @@ function basePlayer(id: string, team: Team, f: FormSpot): Player {
     sep: 0,
     cushion: 0,
     tipTried: false,
+    fx: 0,
+    fxKind: "",
   };
 }
 
@@ -3844,6 +3918,7 @@ function freshBall(): BallState {
     tip: false,
     fumble: false,
     deadBall: false,
+    offTarget: false,
     swatDone: false,
   };
 }

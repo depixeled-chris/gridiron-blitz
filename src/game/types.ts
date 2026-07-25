@@ -170,6 +170,11 @@ export interface Player {
   cushion: number;
   /** already used his one grab attempt on the current tipped ball */
   tipTried: boolean;
+  /** impact flash timer (s) — counts DOWN from ~0.9 on the man who just played
+   *  the ball, so the visual says who swatted / dropped / tipped it */
+  fx: number;
+  /** what that flash means: colours the ring (defensive play vs offensive gaffe) */
+  fxKind: "swat" | "drop" | "tip" | "";
 }
 
 export interface BallState {
@@ -204,6 +209,11 @@ export interface BallState {
    *  comes when it settles. This is what makes an incompletion readable:
    *  you see the swat, the drop, the bounce — not a ball that blinks out. */
   deadBall: boolean;
+  /** this throw was a genuine MISFIRE — placed where the receiver was never
+   *  going. He has to stop, turn and work back to it, so he often can't get
+   *  there: that's what makes a badly thrown ball readable as a bad throw
+   *  instead of just a differently-placed catch. */
+  offTarget: boolean;
   /** one-shot latch: a line defender already got his single deflection attempt this throw */
   swatDone: boolean;
 }
