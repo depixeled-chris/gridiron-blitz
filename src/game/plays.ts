@@ -258,6 +258,7 @@ export const OFFENSE_FORMATIONS: OffenseFormation[] = [
       RUN.sneak, RUN.dive, RUN.iso,
       RUN.power, RUN.counter, PASS.fade,
       PASS.smash, PASS.hitches, RUN.qbkeep,
+      CONVERT.twodive, CONVERT.twoslants,
     ],
   },
   {
@@ -270,12 +271,6 @@ export const OFFENSE_FORMATIONS: OffenseFormation[] = [
     align: PUNT_ALIGN,
     plays: [SPECIAL.punt],
   },
-  {
-    // shown only during a point-after try (filtered out of normal play-calling)
-    id: "convert", name: "GO FOR TWO", tag: "2PT",
-    align: { QB: { fwd: -1, lat: 0 }, R: { fwd: -3, lat: 0 }, F: { fwd: -2, lat: 0 }, A: { lat: -5 }, B: { lat: 5 }, C: { lat: 3 } },
-    plays: [CONVERT.xp, CONVERT.twodive, CONVERT.twoslants],
-  },
 ];
 
 // ---- defensive coverage menu (shared across fronts) -------------------
@@ -284,6 +279,8 @@ const COV: Record<string, DefensePlay> = {
   cover2: { id: "cover2", name: "COVER 2", coverage: "cover2", blitzers: 0 },
   cover3: { id: "cover3", name: "COVER 3", coverage: "cover3", blitzers: 0 },
   cover4: { id: "cover4", name: "COVER 4", coverage: "cover4", blitzers: 0 },
+  // three deep thirds with man underneath — every front carries this call
+  cover3man: { id: "cover3man", name: "COVER 3 MAN UNDER", coverage: "cover3man", blitzers: 0, press: 0.6 },
   zoneblitz: { id: "zoneblitz", name: "ZONE BLITZ", coverage: "cover3", blitzers: 2 },
   fireblitz: { id: "fireblitz", name: "FIRE ZONE", coverage: "cover2", blitzers: 2 },
   manblitz: { id: "manblitz", name: "MAN BLITZ", coverage: "man", blitzers: 1, press: 0.8 },
@@ -303,8 +300,8 @@ const ST: Record<string, DefensePlay> = {
 const ST_BLOCK_MENU = [ST.blockMiddle, ST.blockEdge, ST.blockSafe];
 const ST_RETURN_MENU = [ST.returnUp, ST.puntBlock];
 
-const PASS_MENU = [COV.man, COV.cover2, COV.cover3, COV.cover4, COV.zoneblitz, COV.fireblitz, COV.manblitz, COV.allout, COV.prevent];
-const RUN_MENU = [COV.man, COV.cover2, COV.cover3, COV.manblitz, COV.zoneblitz, COV.fireblitz, COV.allout];
+const PASS_MENU = [COV.man, COV.cover2, COV.cover3, COV.cover3man, COV.cover4, COV.zoneblitz, COV.fireblitz, COV.manblitz, COV.allout, COV.prevent];
+const RUN_MENU = [COV.man, COV.cover2, COV.cover3, COV.cover3man, COV.manblitz, COV.zoneblitz, COV.fireblitz, COV.allout];
 
 const D = (slot: string, role: "DL" | "LB" | "CB" | "S", fwd: number, lat: number, num: number) =>
   ({ slot, role, fwd, lat, num });

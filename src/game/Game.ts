@@ -791,18 +791,18 @@ export class Game {
     const cover = defenders.filter((d) => !this.rushers.has(d.id));
     const receivers = this.players.filter((p) => p.team === offTeam && !!p.target);
 
-    if (play.coverage === "man") {
-      // CBs take the widest receivers; safeties/LBs take the rest inside-out
+    // CBs take the widest receivers; safeties/LBs take the rest inside-out
+    const assignMan = (defs: Player[], spyLeftovers: boolean) => {
       const recs = [...receivers].sort((a, b) => a.oy - b.oy);
-      const cbs = cover.filter((d) => d.defRole === "CB");
-      const rest = cover.filter((d) => d.defRole !== "CB");
+      const cbs = defs.filter((d) => d.defRole === "CB");
+      const rest = defs.filter((d) => d.defRole !== "CB");
       const wides = recs.filter((r) => Math.abs(r.oy - midY) > 5 * YARD);
       const inside = recs.filter((r) => Math.abs(r.oy - midY) <= 5 * YARD);
-      const assign = (defs: Player[], targs: Player[]) => {
+      const assign = (ds: Player[], targs: Player[]) => {
         for (const t of targs) {
           let best: Player | null = null;
           let bd = Infinity;
-          for (const d of defs) {
+          for (const d of ds) {
             if (d.assignId) continue;
             const dd = Math.abs(d.oy - t.oy);
             if (dd < bd) {
@@ -819,30 +819,52 @@ export class Game {
       assign(cbs, wides);
       assign([...rest, ...cbs], inside);
       // leftover defenders spy / robber the middle
-      for (const d of cover) if (d.job !== "man") d.job = "spy";
+      if (spyLeftovers) for (const d of defs) if (d.job !== "man") d.job = "spy";
+    };
+    const spread = (defs: Player[], fwd: number, span: number) => {
+      const n = defs.length;
+      defs
+        .slice()
+        .sort((a, b) => a.oy - b.oy)
+        .forEach((d, i) => {
+          const frac = n === 1 ? 0.5 : i / (n - 1);
+          const lat = (frac - 0.5) * span; // yards across the field
+          d.job = "zone";
+          d.zone = {
+            x: clamp(this.los + dir * fwd * YARD, LEFT_GOAL, RIGHT_GOAL + 200),
+            y: clamp(midY + lat * YARD, SIDELINE, WORLD_H - SIDELINE),
+          };
+        });
+    };
+    const byDepth = [...cover].sort((a, b) => (b.ox - a.ox) * dir);
+
+    if (play.coverage === "man") {
+      assignMan(cover, true);
+    } else if (play.coverage === "cover3man") {
+      // THREE DEEP, MAN UNDER: three deep thirds so nothing gets over the top,
+      // and everyone underneath travels with a man. Plays tight like man but
+      // with a safety net — the answer to man-beating routes.
+      // Deep thirds go to DBs (safeties first, then a corner): a linebacker
+      // running a deep third is a mismatch nobody would ever call.
+      const deepRank = (d: Player) =>
+        d.defRole === "S" ? 0 : d.defRole === "CB" ? 1 : 2;
+      const forDeep = [...cover].sort(
+        (a, b) => deepRank(a) - deepRank(b) || (b.ox - a.ox) * dir
+      );
+      const deep = forDeep.slice(0, Math.min(3, forDeep.length));
+      const under = cover.filter((d) => !deep.includes(d));
+      // deeper than a normal cover-3 shell (16yd): there is no underneath zone
+      // help here, so the thirds exist purely to cap the vertical routes that
+      // beat man — sit ON TOP of them, not in front.
+      spread(deep, 20, 16);
+      assignMan(under, true);
     } else {
       // zone: deep shell + underneath, spread across the field width
       const nDeep = play.coverage === "cover2" ? 2 : play.coverage === "cover3" ? 3 : 4;
       // deepest coverage players take the deep zones
-      const byDepth = [...cover].sort((a, b) => (b.ox - a.ox) * dir);
       const deep = byDepth.slice(0, Math.min(nDeep, byDepth.length));
       const under = byDepth.slice(deep.length);
       const deepFwd = play.coverage === "cover4" ? 14 : 16;
-      const spread = (defs: Player[], fwd: number, span: number) => {
-        const n = defs.length;
-        defs
-          .slice()
-          .sort((a, b) => a.oy - b.oy)
-          .forEach((d, i) => {
-            const frac = n === 1 ? 0.5 : i / (n - 1);
-            const lat = (frac - 0.5) * span; // yards across the field
-            d.job = "zone";
-            d.zone = {
-              x: clamp(this.los + dir * fwd * YARD, LEFT_GOAL, RIGHT_GOAL + 200),
-              y: clamp(midY + lat * YARD, SIDELINE, WORLD_H - SIDELINE),
-            };
-          });
-      };
       // deep safeties sit over the hashes (not the sidelines) so they actually
       // bracket the deep HALVES — a wide spread left the deep middle wide open.
       spread(deep, deepFwd, play.coverage === "cover2" ? 11 : 16);

@@ -44,7 +44,8 @@ export interface OffensePlay {
   routes: Record<string, RouteNode[]>;
 }
 
-export type Coverage = "man" | "cover2" | "cover3" | "cover4";
+/** "cover3man" = three deep zone thirds with MAN coverage underneath */
+export type Coverage = "man" | "cover2" | "cover3" | "cover4" | "cover3man";
 
 export interface DefensePlay {
   id: string;
