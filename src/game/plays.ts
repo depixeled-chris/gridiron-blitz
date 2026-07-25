@@ -213,7 +213,11 @@ const KICKOFF_ALIGN = {
 };
 
 const SPECIAL: Record<string, OffensePlay> = {
-  kickoff: { id: "kickoff", name: "KICKOFF", kind: "kickoff", align: KICKOFF_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
+  kickoff: { id: "kickoff", name: "DEEP KICK", kind: "kickoff", align: KICKOFF_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
+  koLeft: { id: "koLeft", name: "ANGLE LEFT", kind: "kickoff", align: KICKOFF_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
+  koRight: { id: "koRight", name: "ANGLE RIGHT", kind: "kickoff", align: KICKOFF_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
+  koSquib: { id: "koSquib", name: "SQUIB", kind: "kickoff", align: KICKOFF_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
+  koOnside: { id: "koOnside", name: "ONSIDE", kind: "kickoff", align: KICKOFF_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
   punt: { id: "punt", name: "PUNT", kind: "punt", align: PUNT_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
   fieldgoal: { id: "fieldgoal", name: "FIELD GOAL", kind: "fg", align: PLACE_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
   xp: { id: "xp", name: "EXTRA POINT", kind: "pat", align: PLACE_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
@@ -279,7 +283,7 @@ export const OFFENSE_FORMATIONS: OffenseFormation[] = [
   {
     id: "kickoffunit", name: "KICKOFF", tag: "KICK OFF",
     align: KICKOFF_ALIGN,
-    plays: [SPECIAL.kickoff],
+    plays: [SPECIAL.kickoff, SPECIAL.koLeft, SPECIAL.koRight, SPECIAL.koSquib, SPECIAL.koOnside],
   },
   {
     id: "puntunit", name: "PUNT UNIT", tag: "PUNT",
@@ -317,6 +321,14 @@ const ST: Record<string, DefensePlay> = {
 };
 const ST_BLOCK_MENU = [ST.blockMiddle, ST.blockEdge, ST.blockSafe];
 const ST_RETURN_MENU = [ST.returnUp, ST.puntBlock];
+/** kick-return calls: which way the wall sets up, or hands team for an onside */
+const KR: Record<string, DefensePlay> = {
+  left: { id: "krLeft", name: "RETURN LEFT", coverage: "man", blitzers: 0 },
+  mid: { id: "krMid", name: "RETURN MIDDLE", coverage: "man", blitzers: 0 },
+  right: { id: "krRight", name: "RETURN RIGHT", coverage: "man", blitzers: 0 },
+  hands: { id: "krHands", name: "HANDS TEAM", coverage: "man", blitzers: 0 },
+};
+const KR_MENU = [KR.mid, KR.left, KR.right, KR.hands];
 
 // Every front carries the same COVERAGE core — full zone shells (cover 2/3/4),
 // full man, man-under variants — so any coverage can be called from any
@@ -476,7 +488,7 @@ export const DEFENSE_FORMATIONS: DefenseFormation[] = [
       D("CB1", "CB", 34, -4, 24),
       D("RET", "S", 52, 0, 15), // the RETURNER — fields the kick and runs it back
     ],
-    plays: ST_RETURN_MENU,
+    plays: KR_MENU,
   },
   {
     // PUNT RETURN: a light rush, jammers on the gunners, and a RETURNER deep.

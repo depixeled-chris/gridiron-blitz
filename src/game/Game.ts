@@ -346,6 +346,29 @@ export class Game {
     if (this.phase !== "playcall") return;
     this.audio.resume();
     this.audio.select();
+    if (this.kickoffPending) {
+      const ko = OFFENSE_FORMATIONS.find((f) => f.id === "kickoffunit")!;
+      const kr = DEFENSE_FORMATIONS.find((f) => f.id === "kickreturn")!;
+      this.offFormation = ko;
+      this.defFormation = kr;
+      if (this.userOnOffense()) {
+        this.offPlay = ko.plays.find((p) => p.id === playId) ?? ko.plays[0];
+        this.defPlay = pick(kr.plays); // CPU picks its return
+      } else {
+        this.defPlay = kr.plays.find((p) => p.id === playId) ?? kr.plays[0];
+        // CPU kicks: onside only when it's desperate, else deep
+        const cpu = this.possession;
+        const opp: Team = cpu === "home" ? "away" : "home";
+        const desperate =
+          this.quarter >= 4 && this.clock < 120 && this.score[cpu] < this.score[opp];
+        this.offPlay =
+          desperate && rng() < 0.6
+            ? ko.plays.find((p) => p.id === "koOnside")!
+            : pick(ko.plays.filter((p) => p.id !== "koOnside"));
+      }
+      this.beginKickoff();
+      return;
+    }
     if (this.userOnOffense()) {
       const f =
         OFFENSE_FORMATIONS.find((x) => x.id === formationId) ??
@@ -596,6 +619,12 @@ export class Game {
     // menu doesn't police it. (The KICKOFF unit is the one exception: a free
     // kick isn't a scrimmage down, so it only appears when one is actually
     // being kicked, never as a play call.)
+    if (this.kickoffPending) {
+      // the ONE case that is restricted: a free kick is kickoff units only
+      return this.userOnOffense()
+        ? OFFENSE_FORMATIONS.filter((f) => f.id === "kickoffunit")
+        : DEFENSE_FORMATIONS.filter((f) => f.id === "kickreturn");
+    }
     if (!this.userOnOffense()) return DEFENSE_FORMATIONS;
     return OFFENSE_FORMATIONS.filter((f) => f.id !== "kickoffunit");
   }
@@ -844,9 +873,15 @@ export class Game {
     // back to field the punt / handle a miss.
     const k = this.offPlay.kind;
     if (k === "kickoff") {
-      // the RETURN team: a wall holds up front, the deep men field the kick
+      // the RETURN team: the wall sets up on the side the RETURN was called to,
+      // the deep men field the kick
+      const laneY = clamp(midY + this.returnLane * 6 * YARD, SIDELINE, WORLD_H - SIDELINE);
       for (const d of defenders) {
-        d.job = d.id.endsWith("_RET") || d.defRole === "S" ? "zone" : "man";
+        const deep = d.id.endsWith("_RET") || d.defRole === "S";
+        d.job = "zone";
+        d.zone = deep
+          ? { x: d.ox, y: d.oy }
+          : { x: d.ox, y: clamp(d.oy * 0.35 + laneY * 0.65, SIDELINE, WORLD_H - SIDELINE) };
       }
       return;
     }
@@ -1110,10 +1145,36 @@ export class Game {
     this.offPlay = this.offFormation.plays[0];
     this.defFormation = DEFENSE_FORMATIONS.find((f) => f.id === "kickreturn")!;
     this.defPlay = this.defFormation.plays[0];
+    // a kickoff is its own down: BOTH sides call from their kickoff units only
+    this.kickoffPending = true;
+    this.offPlay = this.offFormation.plays[0];
+    this.defPlay = this.defFormation.plays[0];
+    this.setupFormation();
+    this.phase = "playcall";
+    this.liveTime = 0;
+    this.message = "KICKOFF";
+    this.pushHud(true);
+    return;
+  }
+
+  /** both kickoff calls are in — line up and tee it */
+  private beginKickoff() {
+    const kicking = this.possession;
+    this.kickoffPending = false;
+    this.kickoffKind =
+      this.offPlay.id === "koOnside"
+        ? "onside"
+        : this.offPlay.id === "koSquib"
+          ? "squib"
+          : "deep";
+    this.kickoffAim =
+      this.offPlay.id === "koLeft" ? -1 : this.offPlay.id === "koRight" ? 1 : 0;
+    this.returnLane =
+      this.defPlay.id === "krLeft" ? -1 : this.defPlay.id === "krRight" ? 1 : 0;
     this.setupFormation();
     this.phase = "live";
     this.liveTime = 0;
-    this.message = "KICKOFF";
+    this.message = this.offPlay.name;
     // the ball is teed up and struck after the kicker's approach
     const b = this.ball;
     const tee = this.byId(`${kicking}_CEN`);
@@ -1156,24 +1217,47 @@ export class Game {
     const dir = this.offDir();
     const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
     const kic = this.kickerRating();
-    // full leg carries to the goal line; a soft one is a squib
-    const yds =
-      (40 + (kic - 75) * 0.25 + 22 * clamp(power, 0, 1)) * (1 - Math.abs(acc) * 0.16) +
-      this.windAssist(dir) * 1.6;
+    // the CALL sets the shape of the kick; power/aim tune it within that
+    let yds: number;
+    if (this.kickoffKind === "onside") {
+      // must travel 10yd to be live for the kicking team — kick it just past
+      yds = 10.5 + rng() * 3;
+    } else if (this.kickoffKind === "squib") {
+      yds = 28 + 10 * clamp(power, 0, 1) + rng() * 4;
+    } else {
+      yds =
+        (40 + (kic - 75) * 0.25 + 22 * clamp(power, 0, 1)) * (1 - Math.abs(acc) * 0.16) +
+        this.windAssist(dir) * 1.6;
+    }
     let landX = b.sx + dir * yds * YARD;
     // don't sail it clean out of the world
     landX = clamp(landX, LEFT_GOAL - 8 * YARD, RIGHT_GOAL + 8 * YARD);
     b.sx = b.x;
     b.sy = b.y;
     b.tx = landX;
-    // ACC is the DIRECTION: aim it down a sideline to shorten the return angle
+    // ACC steers, and an ANGLE call commits it to a sideline
     b.ty = clamp(
-      WORLD_H / 2 + acc * 9 * YARD + (rng() - 0.5) * 2 * YARD,
+      WORLD_H / 2 + (acc + this.kickoffAim) * 8 * YARD + (rng() - 0.5) * 2 * YARD,
       SIDELINE,
       WORLD_H - SIDELINE
     );
-    b.peak = (4 + 1.6 * clamp(power, 0, 1)) * YARD; // hang time rides with leg
+    // a squib skids low; an onside is a short high bouncer; a deep kick hangs
+    b.peak =
+      this.kickoffKind === "squib"
+        ? 1.1 * YARD
+        : this.kickoffKind === "onside"
+          ? 1.6 * YARD
+          : (4 + 1.6 * clamp(power, 0, 1)) * YARD;
     b.ftime = Math.max(1.2, (Math.abs(b.tx - b.sx) / KICK_SPEED) * 1.35);
+    // An ONSIDE is driven into the turf to take a high, slow hop: that hang is
+    // the entire point, it's what lets the coverage cover the legal 10 yards
+    // and get there with the hands team. A short flat kick is just a free
+    // recovery for the receiving side.
+    if (this.kickoffKind === "onside") {
+      b.ftime = 1.75 + rng() * 0.35;
+      for (const p of this.players) p.tipTried = false; // fresh scramble
+    }
+    if (this.kickoffKind === "squib") b.ftime = Math.max(0.9, b.ftime * 0.75);
     b.elapsed = 0;
     b.t = 0;
     b.inAir = true;
@@ -1198,6 +1282,60 @@ export class Game {
     // COMES DOWN. (This used to fire anywhere the ball was under jump height,
     // so the front wall caught the kickoff 9-10yd off the tee on the way up:
     // every kickoff "went 10 yards".)
+    // ONSIDE: a live scramble the moment it's down. The kicking team can only
+    // recover it once it has travelled the legal 10 yards; the return team can
+    // take it any time. First man to it keeps it and can run.
+    if (this.kickoffKind === "onside") {
+      const gone = dist(b.x, b.y, b.sx, b.sy) / YARD;
+      // The scramble opens as it comes DOWN — by then it has covered its 10
+      // legal yards, so both teams are eligible and it's a genuine race. (At
+      // 80% of flight it had only gone ~9.6yd, which made the kicking team
+      // illegal at the exact moment the hands team was picking it up: the
+      // kicking team could never recover.)
+      if (b.t >= 0.96) {
+        // Head-to-head race for the bouncing ball: closest man from EACH side,
+        // and the margin between them sets the odds. The hands team lines up on
+        // top of it so they're usually favoured — but a coverage man arriving a
+        // step behind still comes up with it often enough to be worth calling.
+        const near = (team: Team) => {
+          let best: Player | null = null;
+          let bd = 4 * YARD; // coverage is arriving at speed, not standing there
+          for (const p of this.players) {
+            if (p.team !== team || p.stun > 0) continue;
+            const d = dist(p.x, p.y, b.x, b.y);
+            if (d < bd) {
+              bd = d;
+              best = p;
+            }
+          }
+          return best ? { p: best, d: bd / YARD } : null;
+        };
+        const retTeam: Team = this.possession === "home" ? "away" : "home";
+        const kickMan = gone >= 10 ? near(this.possession) : null; // 10yd rule
+        const retMan = near(retTeam);
+        if (kickMan || retMan) {
+          let winner: Player;
+          if (!retMan) winner = kickMan!.p;
+          else if (!kickMan) winner = retMan.p;
+          else {
+            // even money at equal distance; each yard of margin swings it hard
+            const pKick = clamp(0.5 + (retMan.d - kickMan.d) * 0.2, 0.06, 0.9);
+            winner = rng() < pKick ? kickMan.p : retMan.p;
+          }
+          const kickingRecovered = winner.team === this.possession;
+          this.fieldKickoff(winner);
+          this.message = kickingRecovered ? "ONSIDE RECOVERED!" : "RETURN TEAM BALL";
+          return;
+        }
+      }
+      if (b.t >= 1 && b.z <= 0.1) {
+        // nobody fell on it — the return team is awarded it where it stopped
+        const near = this.nearestReturner(b.x, b.y);
+        if (near) return this.fieldKickoff(near);
+      }
+      return;
+    }
+
     const toLand = dist(b.x, b.y, b.tx, b.ty);
     if (b.z <= REACH && (toLand < 7 * YARD || b.t > 0.8)) {
       let best: Player | null = null;
@@ -1998,6 +2136,13 @@ export class Game {
       if (p.team !== offTeam) continue;
       if (p.role === "OL") continue; // handled in blocking
 
+      // COVERAGE: once a kickoff is away, the whole kicking team sprints down
+      // under it. (They were standing at the tee — the kickoff unit has no
+      // routes, so nobody covered, and an onside could never be recovered.)
+      if (this.offPlay.kind === "kickoff" && this.ball.inAir) {
+        this.moveToward(p, this.ball.tx, this.ball.ty, dt, 1);
+        continue;
+      }
       // the kick unit holds its alignment: the holder stays down over the spot
       // and the kicker's approach is driven by the operation, not by route logic
       if (this.kickMode && !this.ball.inAir) {
@@ -3826,6 +3971,12 @@ export class Game {
   /** this play is a KICKOFF RETURN: it ends in a fresh series for the returner's
    *  team at the spot, not in down-and-distance bookkeeping */
   private kickReturn = false;
+  /** a kickoff is awaiting its play calls */
+  private kickoffPending = false;
+  private kickoffKind: "deep" | "squib" | "onside" = "deep";
+  /** -1 left / 0 middle / +1 right — the kicker's aim and the return's lane */
+  private kickoffAim = 0;
+  private returnLane = 0;
   /** seconds until the teed kickoff is struck */
   private kickoffWait = 0;
 
