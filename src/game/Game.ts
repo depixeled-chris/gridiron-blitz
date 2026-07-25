@@ -1136,27 +1136,49 @@ export class Game {
     b.z = 0;
     b.t = 0;
     b.elapsed = 0;
-    this.kickMode = null;
-    this.kickoffWait = 0.7; // the approach, then it's struck
+    this.kickMode = "kickoff"; // a kicking play — the meter drives it
+    if (this.userOnOffense() && !this.headless) {
+      const kic = this.kickerRating();
+      this.kickAccWin = clamp(0.3 + (kic - 75) * 0.006, 0.18, 0.55);
+      this.kickStage = "power";
+      this.kickMeter = 0;
+      this.kickMeterDir = 1;
+      this.kickPower = 0;
+      this.kickoffWait = 0;
+      this.message = "TAP: POWER";
+    } else {
+      this.kickStage = null;
+      this.kickoffWait = 0.7; // AI approach, then it's struck
+    }
     this.setControlFlags();
     this.pushHud(true);
   }
 
-  /** strike the kickoff: a high, deep ball toward the return team's goal */
-  private launchKickoff() {
+  /** strike the kickoff. `power` (0..1) is leg, `acc` (-1..1) steers it left or
+   * right — a kickoff is a kicking play, so the human gets the same two-stage
+   * meter he gets on a field goal, and can squib or angle it to a sideline. */
+  private launchKickoff(power = 1, acc = 0) {
     const b = this.ball;
     const dir = this.offDir();
     const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
     const kic = this.kickerRating();
-    const yds = 58 + (kic - 75) * 0.25 + rng() * 8 + this.windAssist(dir) * 1.6;
+    // full leg carries to the goal line; a soft one is a squib
+    const yds =
+      (40 + (kic - 75) * 0.25 + 22 * clamp(power, 0, 1)) * (1 - Math.abs(acc) * 0.16) +
+      this.windAssist(dir) * 1.6;
     let landX = b.sx + dir * yds * YARD;
     // don't sail it clean out of the world
     landX = clamp(landX, LEFT_GOAL - 8 * YARD, RIGHT_GOAL + 8 * YARD);
     b.sx = b.x;
     b.sy = b.y;
     b.tx = landX;
-    b.ty = clamp(WORLD_H / 2 + (rng() - 0.5) * 8 * YARD, SIDELINE, WORLD_H - SIDELINE);
-    b.peak = 5 * YARD; // kickoffs are HIGH — that's the coverage's hang time
+    // ACC is the DIRECTION: aim it down a sideline to shorten the return angle
+    b.ty = clamp(
+      WORLD_H / 2 + acc * 9 * YARD + (rng() - 0.5) * 2 * YARD,
+      SIDELINE,
+      WORLD_H - SIDELINE
+    );
+    b.peak = (4 + 1.6 * clamp(power, 0, 1)) * YARD; // hang time rides with leg
     b.ftime = Math.max(1.2, (Math.abs(b.tx - b.sx) / KICK_SPEED) * 1.35);
     b.elapsed = 0;
     b.t = 0;
@@ -1178,8 +1200,12 @@ export class Game {
     const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
     const inEndZone = dir > 0 ? b.x >= goalX : b.x <= goalX;
 
-    // a returner under the ball fields it and the return is ON
-    if (b.z <= REACH) {
+    // a returner under the ball fields it and the return is ON — but only as it
+    // COMES DOWN. (This used to fire anywhere the ball was under jump height,
+    // so the front wall caught the kickoff 9-10yd off the tee on the way up:
+    // every kickoff "went 10 yards".)
+    const toLand = dist(b.x, b.y, b.tx, b.ty);
+    if (b.z <= REACH && (toLand < 7 * YARD || b.t > 0.8)) {
       let best: Player | null = null;
       let bd = CATCH_R * 2.2;
       for (const p of this.players) {
@@ -1601,6 +1627,7 @@ export class Game {
 
   /** launch the kick from a metered power (0..1) + aim error (-1..1). */
   private fireKick(power: number, acc: number) {
+    if (this.kickMode === "kickoff") return this.launchKickoff(power, acc);
     if (this.tryBlockKick()) return;
     const b = this.ball;
     const dir = this.offDir();
@@ -2941,13 +2968,15 @@ export class Game {
   private updateBall(dt: number) {
     const b = this.ball;
     if (this.kickMode === "kickoff") {
-      this.updateKickoff(dt);
-      return;
-    }
-    // teed up, kicker approaching — strike it when the approach finishes
-    if (this.kickoffWait > 0) {
-      this.kickoffWait -= dt;
-      if (this.kickoffWait <= 0) this.launchKickoff();
+      if (b.inAir) {
+        this.updateKickoff(dt);
+        return;
+      }
+      // still on the tee: the AI's approach clock, or the human's meter
+      if (this.kickoffWait > 0) {
+        this.kickoffWait -= dt;
+        if (this.kickoffWait <= 0) this.launchKickoff(0.88 + rng() * 0.12, (rng() - 0.5) * 0.5);
+      }
       return;
     }
     if (this.kickMode) {
