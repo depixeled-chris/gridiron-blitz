@@ -263,31 +263,69 @@ export class Game {
     this.possession = "home";
     this.setNewSeries(LEFT_GOAL + 20 * YARD);
     // a game opens with the TOSS — the winner receives, and the loser kicks off
+    this.wind = {
+      dir: rng() < 0.5 ? 1 : -1,
+      mph: Math.round(rng() * 19),
+    };
     this.tossResult = null;
+    this.tossChoice = null;
     this.phase = "toss";
     this.message = "COIN TOSS — YOUR CALL";
     this.pushHud(true);
   }
 
-  /** the user calls it in the air; winner receives the opening kickoff */
+  /** the user calls it in the air. Winning the toss does NOT mean the ball —
+   * it means the CHOICE: take the ball, or take the wind and make them kick
+   * into it all game. */
   callToss(pick: "heads" | "tails") {
     if (this.phase !== "toss") return;
     this.audio.select();
     const flip: "heads" | "tails" = rng() < 0.5 ? "heads" : "tails";
     const userWon = flip === pick;
     this.tossResult = { flip, userWon };
-    // winner receives -> the LOSER kicks off, so possession starts with the kicker
-    const receiving: Team = userWon ? this.userTeam : this.userTeam === "home" ? "away" : "home";
+    this.message = `${flip.toUpperCase()} — ${userWon ? "YOU WIN" : "CPU WINS"} THE TOSS`;
+    if (!userWon) {
+      // CPU elects: it takes the wind when it's genuinely strong, else the ball
+      this.electToss(this.wind.mph >= 12 ? "wind" : "receive", false);
+    }
+    this.pushHud(true);
+  }
+
+  /** the toss winner's election: take the ball, or take the wind */
+  electToss(choice: "receive" | "wind", byUser = true) {
+    if (this.phase !== "toss" || !this.tossResult) return;
+    if (byUser && !this.tossResult.userWon) return;
+    const winner: Team = this.tossResult.userWon
+      ? this.userTeam
+      : this.userTeam === "home"
+        ? "away"
+        : "home";
+    const loser: Team = winner === "home" ? "away" : "home";
+    let receiving: Team;
+    if (choice === "receive") {
+      receiving = winner;
+    } else {
+      // take the wind: set it at the winner's back for the whole game, and let
+      // the other side have the ball first
+      receiving = loser;
+      this.wind.dir = winner === "home" ? 1 : -1;
+    }
     this.kickingTeam = receiving === "home" ? "away" : "home";
     this.openingKicker = this.kickingTeam; // the halves swap off this
-    this.message = `${flip.toUpperCase()} — ${userWon ? "YOU" : "CPU"} RECEIVE`;
-    this.pushHud(true);
+    this.tossChoice = choice;
+    this.message =
+      choice === "wind"
+        ? `${this.tossResult.userWon ? "YOU TAKE" : "CPU TAKES"} THE WIND`
+        : `${this.tossResult.userWon ? "YOU RECEIVE" : "CPU RECEIVES"}`;
     this.openingKickoff = true;
+    this.pushHud(true);
   }
 
   /** React polls this to render the toss screen */
   tossState() {
-    return this.tossResult;
+    return this.tossResult
+      ? { ...this.tossResult, choice: this.tossChoice, wind: { ...this.wind } }
+      : null;
   }
   /** the user taps through the toss result into the opening kickoff */
   startFromToss() {
@@ -561,6 +599,7 @@ export class Game {
   //      possession flips so a suite can run a fixed script of plays) ----------
   /** start a fresh HOME offensive series with the LOS at `ownYd` (0-100). */
   testNewSeries(ownYd: number) {
+    this.wind = { dir: 1, mph: 0 }; // calm by default so the suite is deterministic
     this.possession = this.userTeam;
     this.tryMode = false;
     this.tryPending = false;
@@ -604,6 +643,10 @@ export class Game {
   testTiers(off: number | null, def: number | null) {
     this.testFlatOff = off;
     this.testFlatDef = def;
+  }
+  /** force the game-day wind (harness): dir +1/-1 toward a goal, speed mph. */
+  testWind(dir: number, mph: number) {
+    this.wind = { dir, mph };
   }
   /** force the defensive matchup (formation+call); null = random AI defense. */
   testDefense(formationId: string | null, playId: string | null) {
@@ -660,6 +703,7 @@ export class Game {
   testState() {
     return {
       phase: this.phase,
+      wind: { ...this.wind },
       possession: this.possession,
       score: { ...this.score },
       msg: this.message,
@@ -1088,7 +1132,7 @@ export class Game {
     const dir = this.offDir();
     const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
     const kic = this.kickerRating();
-    const yds = 58 + (kic - 75) * 0.25 + rng() * 8;
+    const yds = 58 + (kic - 75) * 0.25 + rng() * 8 + this.windAssist(dir) * 1.6;
     let landX = b.sx + dir * yds * YARD;
     // don't sail it clean out of the world
     landX = clamp(landX, LEFT_GOAL - 8 * YARD, RIGHT_GOAL + 8 * YARD);
@@ -1442,7 +1486,8 @@ export class Game {
       b.ftime = Math.max(0.7, (Math.abs(b.tx - b.sx) / KICK_SPEED) * 1.1);
       this.message = kind === "pat" ? "EXTRA POINT…" : "FIELD GOAL…";
     } else {
-      const puntYds = 38 + (this.kickerRating() - 75) * 0.22 + rng() * 8;
+      const puntYds =
+        38 + (this.kickerRating() - 75) * 0.22 + rng() * 8 + this.windAssist(dir) * 1.4;
       let landX = b.sx + dir * puntYds * YARD;
       if (dir > 0 ? landX >= goalX : landX <= goalX) landX = goalX; // touchback
       b.tx = landX;
@@ -1577,7 +1622,7 @@ export class Game {
       const kic = this.kickerRating();
       const maxGross = 44 + (kic - 75) * 0.3;
       const timing = 1 - Math.abs(acc) * 0.4; // poor aim shanks it short
-      const puntYds = (28 + power * (maxGross - 28)) * timing;
+      const puntYds = (28 + power * (maxGross - 28)) * timing + this.windAssist(dir) * 1.4;
       let landX = b.sx + dir * puntYds * YARD;
       if (dir > 0 ? landX >= goalX : landX <= goalX) landX = goalX; // touchback
       b.tx = landX;
@@ -1591,6 +1636,13 @@ export class Game {
   /** the kicking team's kicker rating (KIC) — an explicit roster rating now;
    *  no more silently promoting an exact 70 to 75 (which made a genuinely
    *  70-rated kicker impossible to roster). */
+  /** How many YARDS the wind is worth to a kick travelling in `dir`. Positive =
+   * at your back. About a quarter-yard per mph, so a 16mph wind is roughly four
+   * yards of field-goal range either way — enough to change a fourth-down call. */
+  private windAssist(dir: number) {
+    return this.wind.mph * 0.25 * (this.wind.dir === dir ? 1 : -1);
+  }
+
   private kickerRating() {
     const k = this.byId(`${this.possession}_K`) ?? this.byId(`${this.possession}_QB`);
     return k ? rate(k.rat, "KIC") : 75;
@@ -1601,7 +1653,8 @@ export class Game {
    *  were several yards shorter) — barely moves short kicks, swings 50+ a lot.
    *  Anchors (75-rated): 25→.97, 35→.94, 45→.78, 53→.70, 60→.33 (design/realism-targets.md). */
   private fgProb(yds: number, kic = this.kickerRating()) {
-    const d = yds - (kic - 75) * 0.4; // effective distance
+    // wind plays exactly like distance: at your back the kick is "shorter"
+    const d = yds - (kic - 75) * 0.4 - this.windAssist(this.offDir()); // effective distance
     if (d <= 25) return 0.97;
     if (d <= 35) return lerp(0.97, 0.92, (d - 25) / 10);
     if (d <= 45) return lerp(0.92, 0.78, (d - 35) / 10); // the knee
@@ -3693,11 +3746,16 @@ export class Game {
    *  this used to be decided by comparing this.message to "SAFETY!". */
   private pendingKickoff: "flip" | "keep" | null = null;
   private tossResult: { flip: "heads" | "tails"; userWon: boolean } | null = null;
+  private tossChoice: "receive" | "wind" | null = null;
   private openingKickoff = false;
   private kickingTeam: Team = "away";
   /** who kicked off to open the GAME — the second half flips it, so whoever
    *  kicked to start the game receives to start the third quarter */
   private openingKicker: Team = "away";
+  /** game-day wind. Blows toward one goal all game (the teams don't switch
+   *  ends here), so it's a standing advantage one way and a tax the other —
+   *  which is what makes the toss a real choice instead of "always receive". */
+  private wind = { dir: 1, mph: 0 };
   /** a half just ended: the next play is the second-half kickoff */
   private halftimeKickoff = false;
   /** this play is a KICKOFF RETURN: it ends in a fresh series for the returner's
@@ -3894,6 +3952,7 @@ export class Game {
   private hudState(): HudState {
     return {
       phase: this.phase,
+      wind: { ...this.wind },
       quarter: this.quarter,
       clock: Math.ceil(this.clock),
       home: this.score.home,

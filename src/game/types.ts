@@ -219,8 +219,16 @@ export interface BallState {
   swatDone: boolean;
 }
 
+export interface Wind {
+  /** world direction the wind BLOWS toward: +1 = toward the right goal */
+  dir: number;
+  /** speed in mph; under ~5 it barely matters, high teens swing a kicking game */
+  mph: number;
+}
+
 export interface HudState {
   phase: Phase;
+  wind: Wind;
   quarter: number;
   clock: number;
   home: number;

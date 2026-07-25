@@ -1,14 +1,24 @@
 import { useState } from "react";
+import type { Wind } from "../game/types";
 
-/** Pre-game coin toss. You call it in the air; the winner receives the opening
- *  kickoff and the loser kicks off. */
+type Toss = {
+  flip: "heads" | "tails";
+  userWon: boolean;
+  choice: "receive" | "wind" | null;
+  wind: Wind;
+};
+
+/** Pre-game coin toss. You call it in the air; winning gives you the CHOICE —
+ *  take the ball, or take the wind and make them kick into it all game. */
 export function CoinToss({
   result,
   onCall,
+  onElect,
   onContinue,
 }: {
-  result: { flip: "heads" | "tails"; userWon: boolean } | null;
+  result: Toss | null;
   onCall: (pick: "heads" | "tails") => void;
+  onElect: (choice: "receive" | "wind") => void;
   onContinue: () => void;
 }) {
   const [spin, setSpin] = useState(false);
@@ -16,10 +26,18 @@ export function CoinToss({
     setSpin(true);
     onCall(pick);
   };
+  const w = result?.wind;
+  const windText = !w
+    ? ""
+    : w.mph < 5
+      ? `Calm — ${w.mph} mph`
+      : `${w.mph} mph toward the ${w.dir >= 0 ? "right" : "left"} goal`;
+
   return (
     <div className="toss">
       <div className="toss-card">
         <div className="toss-title">COIN TOSS</div>
+
         {!result ? (
           <>
             <div className="toss-sub">Call it in the air</div>
@@ -41,12 +59,36 @@ export function CoinToss({
               {result.flip.toUpperCase()} —{" "}
               {result.userWon ? "YOU WIN THE TOSS" : "CPU WINS THE TOSS"}
             </div>
-            <div className="toss-elect">
-              {result.userWon ? "You receive" : "CPU receives"}
-            </div>
-            <button className="toss-btn wide" onClick={onContinue}>
-              KICKOFF
-            </button>
+            <div className="toss-wind">{windText}</div>
+
+            {result.userWon && !result.choice ? (
+              <>
+                <div className="toss-sub">Your choice</div>
+                <div className="toss-btns">
+                  <button className="toss-btn" onClick={() => onElect("receive")}>
+                    RECEIVE
+                  </button>
+                  <button className="toss-btn" onClick={() => onElect("wind")}>
+                    TAKE WIND
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="toss-elect">
+                  {result.choice === "wind"
+                    ? result.userWon
+                      ? "You take the wind — they receive"
+                      : "CPU takes the wind — you receive"
+                    : result.userWon
+                      ? "You receive"
+                      : "CPU receives"}
+                </div>
+                <button className="toss-btn wide" onClick={onContinue}>
+                  KICKOFF
+                </button>
+              </>
+            )}
           </>
         )}
       </div>

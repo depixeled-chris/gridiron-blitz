@@ -21,6 +21,20 @@ export function Scoreboard({ hud }: { hud: HudState }) {
       <div className="center">
         <div className="clock">{fmtClock(hud.clock)}</div>
         <div className="qtr">Q{Math.min(hud.quarter, 4)}</div>
+        {/* WINDSOCK: which way it's blowing and how hard. A calm day barely
+            moves a kick; high teens is worth several yards of range. */}
+        <div className="wind" title={`Wind ${hud.wind.mph} mph`}>
+          <span
+            className={`sock${hud.wind.mph < 5 ? " calm" : ""}`}
+            style={{ transform: `scaleX(${hud.wind.dir >= 0 ? 1 : -1})` }}
+          >
+            <span
+              className="sock-body"
+              style={{ ["--gust" as string]: Math.min(1, hud.wind.mph / 20) }}
+            />
+          </span>
+          <span className="wind-mph">{hud.wind.mph}</span>
+        </div>
         {hud.phase !== "menu" && hud.phase !== "gameover" && (
           <div className="downbar">
             <span>{downText}</span>

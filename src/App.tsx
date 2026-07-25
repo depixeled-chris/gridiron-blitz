@@ -14,6 +14,7 @@ import { BUILD } from "./version";
 
 const EMPTY: HudState = {
   phase: "menu",
+  wind: { dir: 1, mph: 0 },
   quarter: 1,
   clock: 0,
   home: 0,
@@ -107,6 +108,7 @@ export function App() {
           <CoinToss
             result={game.tossState()}
             onCall={(pick) => game.callToss(pick)}
+            onElect={(c) => game.electToss(c)}
             onContinue={() => game.startFromToss()}
           />
         )}

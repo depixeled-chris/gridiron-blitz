@@ -763,3 +763,27 @@ body {
   0% { transform: rotateX(0deg) scale(0.7); }
   100% { transform: rotateX(1080deg) scale(1); }
 }
+
+/* ---- windsock -------------------------------------------------------- */
+.wind { display: flex; align-items: center; gap: 4px; margin-left: 8px; }
+.wind .sock { display: inline-block; width: 26px; height: 14px; position: relative; }
+/* pole */
+.wind .sock::before {
+  content: ""; position: absolute; left: 0; top: 0; width: 2px; height: 14px;
+  background: #cfd8ee; border-radius: 1px;
+}
+/* the sock itself — a tapered cone that lifts and straightens as it gusts */
+.wind .sock-body {
+  position: absolute; left: 2px; top: 2px;
+  width: calc(8px + 14px * var(--gust, 0.5));
+  height: 8px;
+  background: linear-gradient(90deg, #ff8a3d, #ffd34d);
+  clip-path: polygon(0 0, 100% 22%, 100% 78%, 0 100%);
+  transform-origin: 0 50%;
+  transform: rotate(calc(28deg - 28deg * var(--gust, 0.5)));
+  border-radius: 1px;
+}
+.wind .sock.calm .sock-body { opacity: 0.45; }
+.wind-mph { font-size: clamp(9px, 1.5vh, 12px); font-weight: 700; opacity: 0.85; }
+
+.toss-wind { margin-top: 4px; opacity: 0.75; font-size: clamp(11px, 1.7vh, 14px); }
