@@ -178,14 +178,40 @@ const RUN: Record<string, OffensePlay> = {
   sneak: { id: "sneak", name: "QB SNEAK", kind: "run", runner: "QB", hole: 0, routes: runRoutes(0) },
 };
 
-const SPECIAL: Record<string, OffensePlay> = {
-  punt: { id: "punt", name: "PUNT", kind: "punt", routes: { A: [], B: [], C: [], R: [] } },
-  fieldgoal: { id: "fieldgoal", name: "FIELD GOAL", kind: "fg", routes: { A: [], B: [], C: [], R: [] } },
+// ---- special teams -----------------------------------------------------
+// Two DIFFERENT units, not one "kick" bucket:
+//  PLACE KICK (FG/PAT): tight wall + wings, HOLDER at 7yd receives the snap and
+//    holds the ball, KICKER steps into it. The strike point is the hold spot.
+//  PUNT: no holder — the snap goes all the way back to the PUNTER at 13yd, he
+//    catches it and kicks it out of his hands. Gunners split wide to cover.
+const PLACE_ALIGN = {
+  // tight line splits — no gaps for a rusher to shoot cleanly
+  LT: { fwd: -0.5, lat: -2.4 }, LG: { fwd: -0.5, lat: -1.2 }, CEN: { fwd: -0.5, lat: 0 },
+  RG: { fwd: -0.5, lat: 1.2 }, RT: { fwd: -0.5, lat: 2.4 },
+  C: { fwd: -0.5, lat: -3.6 }, F: { fwd: -0.5, lat: 3.6 }, // ends
+  A: { fwd: -1.3, lat: -4.8 }, B: { fwd: -1.3, lat: 4.8 }, // wings
+  R: { fwd: -7, lat: 0 }, // HOLDER — takes the snap, holds it at the spot
+  QB: { fwd: -8.2, lat: -1.4 }, // KICKER — approaches from behind/off-side
 };
 
-// point-after attempt: kick the extra point, or go for two (one all-or-nothing play)
+const PUNT_ALIGN = {
+  LT: { fwd: -0.5, lat: -2.4 }, LG: { fwd: -0.5, lat: -1.2 }, CEN: { fwd: -0.5, lat: 0 },
+  RG: { fwd: -0.5, lat: 1.2 }, RT: { fwd: -0.5, lat: 2.4 },
+  C: { fwd: -0.5, lat: -3.6 }, F: { fwd: -4.5, lat: 1.5 }, // end + personal protector
+  A: { fwd: -0.5, lat: -11 }, B: { fwd: -0.5, lat: 11 }, // gunners
+  R: { fwd: -4.5, lat: -1.5 }, // personal protector (NO holder on a punt)
+  QB: { fwd: -13, lat: 0 }, // PUNTER — catches the long snap and kicks it
+};
+
+const SPECIAL: Record<string, OffensePlay> = {
+  punt: { id: "punt", name: "PUNT", kind: "punt", align: PUNT_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
+  fieldgoal: { id: "fieldgoal", name: "FIELD GOAL", kind: "fg", align: PLACE_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
+  xp: { id: "xp", name: "EXTRA POINT", kind: "pat", align: PLACE_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
+};
+
+// going for two is NOT a special formation — it's a regular offensive play from
+// a regular formation (the PAT kick lives on the place-kick unit instead).
 const CONVERT: Record<string, OffensePlay> = {
-  xp: { id: "xp", name: "EXTRA POINT", kind: "pat", routes: { A: [], B: [], C: [], R: [] } },
   twodive: { id: "twodive", name: "2PT DIVE", kind: "run", runner: "RB", hole: 0, routes: runRoutes(0) },
   twoslants: {
     id: "twoslants", name: "2PT SLANTS", kind: "pass",
@@ -235,13 +261,18 @@ export const OFFENSE_FORMATIONS: OffenseFormation[] = [
     ],
   },
   {
-    id: "special", name: "SPECIAL TEAMS", tag: "KICK",
-    align: { QB: { fwd: -8, lat: 0 }, R: { fwd: -7, lat: -2 } },
-    plays: [SPECIAL.punt, SPECIAL.fieldgoal],
+    id: "placekick", name: "PLACE KICK", tag: "FG / PAT",
+    align: PLACE_ALIGN,
+    plays: [SPECIAL.fieldgoal, SPECIAL.xp],
+  },
+  {
+    id: "puntunit", name: "PUNT UNIT", tag: "PUNT",
+    align: PUNT_ALIGN,
+    plays: [SPECIAL.punt],
   },
   {
     // shown only during a point-after try (filtered out of normal play-calling)
-    id: "convert", name: "POINT AFTER", tag: "PAT / 2PT",
+    id: "convert", name: "GO FOR TWO", tag: "2PT",
     align: { QB: { fwd: -1, lat: 0 }, R: { fwd: -3, lat: 0 }, F: { fwd: -2, lat: 0 }, A: { lat: -5 }, B: { lat: 5 }, C: { lat: 3 } },
     plays: [CONVERT.xp, CONVERT.twodive, CONVERT.twoslants],
   },
@@ -259,6 +290,18 @@ const COV: Record<string, DefensePlay> = {
   allout: { id: "allout", name: "ALL-OUT BLITZ", coverage: "man", blitzers: 3, press: 0.7 },
   prevent: { id: "prevent", name: "PREVENT", coverage: "cover4", blitzers: 0 },
 };
+
+// special-teams calls. `blitzers` is the extra rush beyond the down linemen —
+// a max-block send is what actually gets a hand on the ball.
+const ST: Record<string, DefensePlay> = {
+  blockMiddle: { id: "blockmiddle", name: "BLOCK — MIDDLE", coverage: "man", blitzers: 3 },
+  blockEdge: { id: "blockedge", name: "BLOCK — EDGE", coverage: "man", blitzers: 2 },
+  blockSafe: { id: "blocksafe", name: "RUSH SAFE", coverage: "man", blitzers: 0 },
+  returnUp: { id: "returnup", name: "RETURN MIDDLE", coverage: "man", blitzers: 0 },
+  puntBlock: { id: "puntblock", name: "PUNT BLOCK", coverage: "man", blitzers: 3 },
+};
+const ST_BLOCK_MENU = [ST.blockMiddle, ST.blockEdge, ST.blockSafe];
+const ST_RETURN_MENU = [ST.returnUp, ST.puntBlock];
 
 const PASS_MENU = [COV.man, COV.cover2, COV.cover3, COV.cover4, COV.zoneblitz, COV.fireblitz, COV.manblitz, COV.allout, COV.prevent];
 const RUN_MENU = [COV.man, COV.cover2, COV.cover3, COV.manblitz, COV.zoneblitz, COV.fireblitz, COV.allout];
@@ -325,5 +368,32 @@ export const DEFENSE_FORMATIONS: DefenseFormation[] = [
       D("CB1", "CB", 4, -9, 24), D("CB2", "CB", 4, 9, 21),
     ],
     plays: RUN_MENU,
+  },
+  // ---- special teams defense: a unit per instance ------------------------
+  {
+    // FG/PAT BLOCK: everybody crowds the line to collapse the middle and get a
+    // hand up at the strike point; the ends loop for the edge.
+    id: "fgblock", name: "FG BLOCK", tag: "VS KICK",
+    front: [
+      D("DE1", "DL", 0.8, -6, 91), D("DT1", "DL", 0.8, -3.5, 94), D("NT1", "DL", 0.8, -1.2, 98),
+      D("NT2", "DL", 0.8, 1.2, 96), D("DT2", "DL", 0.8, 3.5, 90), D("DE2", "DL", 0.8, 6, 56),
+      D("WLB", "LB", 1.5, -8, 54), D("SLB", "LB", 1.5, 8, 58),
+      D("MLB", "LB", 2.5, 0, 52),
+      D("CB1", "CB", 5, -11, 24), D("CB2", "CB", 5, 11, 21),
+    ],
+    plays: ST_BLOCK_MENU,
+  },
+  {
+    // PUNT RETURN: a light rush, jammers on the gunners, and a RETURNER deep.
+    id: "puntreturn", name: "PUNT RETURN", tag: "VS PUNT",
+    front: [
+      D("DE1", "DL", 0.8, -4, 91), D("DT1", "DL", 0.8, -1.5, 94),
+      D("DT2", "DL", 0.8, 1.5, 98), D("DE2", "DL", 0.8, 4, 56),
+      D("WLB", "LB", 3, -7, 54), D("SLB", "LB", 3, 7, 58),
+      D("CB1", "CB", 2, -11, 24), D("CB2", "CB", 2, 11, 21), // jam the gunners
+      D("FS", "S", 14, -3, 31), D("SS", "S", 14, 3, 33),
+      D("RET", "S", 42, 0, 15), // the returner, fielding it deep
+    ],
+    plays: ST_RETURN_MENU,
   },
 ];

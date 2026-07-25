@@ -76,6 +76,11 @@ const OFF_FORM: FormSpot[] = [
   { slot: "C", role: "TE", num: 84, target: "3" },
 ];
 
+/** defensive special-teams units — shown only against a kick */
+const ST_DEF_IDS = new Set(["fgblock", "puntreturn"]);
+/** the defensive unit that answers each kind of kick */
+const ST_DEF_FOR = (kind: string) => (kind === "punt" ? "puntreturn" : "fgblock");
+
 const TARGET_KEYS: Record<string, string> = {
   Digit1: "1",
   Digit2: "2",
@@ -138,6 +143,11 @@ export class Game {
   // the snap and the launch, so the defense can come after the block. (The human
   // kicker's meter is his own get-off clock — the field runs underneath it.)
   private kickHold = 0;
+  /** stage of the kick operation: the snap in flight, then the ball in hand at
+   *  the strike point. null once the ball is off the foot (or the play is over). */
+  private kickOp: "snap" | "hold" | null = null;
+  private kickOpT = 0;
+  private kickSnapTime = 0.6;
   // point-after state: a try is pending after a TD; conversion is the active attempt
   private tryPending = false;
   private tryMode = false;
@@ -267,6 +277,11 @@ export class Game {
         this.defPlay =
           this.defFormation.plays.find((p) => p.id === this.testDefPlay) ??
           this.defFormation.plays[0];
+      } else if (this.offPlay.kind === "fg" || this.offPlay.kind === "pat" || this.offPlay.kind === "punt") {
+        // the user is kicking — the CPU answers with the matching ST unit
+        this.defFormation =
+          DEFENSE_FORMATIONS.find((x) => x.id === ST_DEF_FOR(this.offPlay.kind))!;
+        this.defPlay = pick(this.defFormation.plays);
       } else {
         this.cpuCallDefense();
       }
@@ -277,9 +292,10 @@ export class Game {
       this.defFormation = f;
       this.defPlay = f.plays.find((p) => p.id === playId) ?? f.plays[0];
       if (this.tryMode) {
-        // CPU always kicks the extra point on its point-after try
+        // CPU always kicks the extra point on its point-after try — off the
+        // real place-kick unit (kicker + holder), same as a field goal
         this.offFormation =
-          OFFENSE_FORMATIONS.find((x) => x.id === "convert")!;
+          OFFENSE_FORMATIONS.find((x) => x.id === "placekick")!;
         this.offPlay =
           this.offFormation.plays.find((p) => p.kind === "pat") ??
           this.offFormation.plays[0];
@@ -310,15 +326,17 @@ export class Game {
     if (this.down === 4) {
       const goForIt = desperate || (this.toGo <= 1 && ydsToGoal < 55);
       if (!goForIt) {
-        const special = OFFENSE_FORMATIONS.find((x) => x.id === "special")!;
+        // the two kicks come off DIFFERENT units now (place kick vs punt team)
+        const placekick = OFFENSE_FORMATIONS.find((x) => x.id === "placekick")!;
+        const puntunit = OFFENSE_FORMATIONS.find((x) => x.id === "puntunit")!;
         const fgDist = ydsToGoal + 17; // snap 7yd back + 10yd of end zone
         if (fgDist <= 58 && this.fgProb(fgDist) >= 0.3) {
-          this.offFormation = special;
-          this.offPlay = special.plays.find((p) => p.kind === "fg")!;
+          this.offFormation = placekick;
+          this.offPlay = placekick.plays.find((p) => p.kind === "fg")!;
           return;
         }
-        this.offFormation = special;
-        this.offPlay = special.plays.find((p) => p.kind === "punt")!;
+        this.offFormation = puntunit;
+        this.offPlay = puntunit.plays.find((p) => p.kind === "punt")!;
         return;
       }
     }
@@ -326,7 +344,7 @@ export class Game {
     // down-and-distance play mix instead of uniform random: lean run on short
     // yardage from heavy sets, lean pass on long yardage from spread sets
     const forms = OFFENSE_FORMATIONS.filter(
-      (x) => x.id !== "special" && x.id !== "convert"
+      (x) => x.id !== "placekick" && x.id !== "puntunit" && x.id !== "convert"
     );
     const pool =
       this.toGo <= 2
@@ -366,7 +384,7 @@ export class Game {
     else if (long) pool = [byId("nickel"), byId("dime"), byId("fourthree")];
     else
       pool = DEFENSE_FORMATIONS.filter(
-        (f) => f.id !== "goalline" && f.id !== "dime"
+        (f) => f.id !== "goalline" && f.id !== "dime" && !ST_DEF_IDS.has(f.id)
       );
     this.defFormation = pick(pool);
 
@@ -483,9 +501,18 @@ export class Game {
   }
 
   availableFormations() {
-    if (!this.userOnOffense()) return DEFENSE_FORMATIONS;
-    // a point-after try offers only the convert menu; normal downs hide it
-    if (this.tryMode) return OFFENSE_FORMATIONS.filter((f) => f.id === "convert");
+    if (!this.userOnOffense()) {
+      // defending a point-after: only the kick-block / return units make sense
+      if (this.tryMode) return DEFENSE_FORMATIONS.filter((f) => ST_DEF_IDS.has(f.id));
+      return DEFENSE_FORMATIONS.filter((f) => !ST_DEF_IDS.has(f.id));
+    }
+    // a try: kick the PAT off the place-kick unit, or go for two from a REGULAR
+    // formation (going for two is an ordinary play, not a special-teams look)
+    if (this.tryMode) {
+      return OFFENSE_FORMATIONS.filter(
+        (f) => f.id === "placekick" || (f.id !== "puntunit" && f.id !== "convert")
+      );
+    }
     return OFFENSE_FORMATIONS.filter((f) => f.id !== "convert");
   }
 
@@ -648,11 +675,12 @@ export class Game {
     const idOf = (team: Team, slot: string) => `${team}_${slot}`;
 
     const offAlign = this.offFormation.align ?? {};
+    const playAlign = this.offPlay.align ?? {}; // per-play override wins (PAT kick unit)
 
     for (const f of OFF_FORM) {
       const p: Player = basePlayer(idOf(offTeam, f.slot), offTeam, f);
       const base = OFFENSE_BASE[f.slot];
-      const ov = offAlign[f.slot];
+      const ov = playAlign[f.slot] ?? offAlign[f.slot];
       const fwd = ov?.fwd ?? base.fwd;
       const lat = ov?.lat ?? base.lat;
       p.ox = clamp(this.los + dir * fwd * YARD, LEFT_GOAL - 40, RIGHT_GOAL + 40);
@@ -715,6 +743,19 @@ export class Game {
     const defenders = this.players.filter((p) => p.team === defTeam);
     const play = this.defPlay;
     this.rushers.clear();
+
+    // VS A KICK: there is nobody to cover — the whole unit goes after the strike
+    // point (that's what makes a kick blockable), except the deep men, who stay
+    // back to field the punt / handle a miss.
+    const k = this.offPlay.kind;
+    if (k === "fg" || k === "pat" || k === "punt") {
+      for (const d of defenders) {
+        const deep = d.id.endsWith("_RET") || (k === "punt" && d.defRole === "S");
+        d.job = deep ? "zone" : "rush";
+        if (!deep) this.rushers.add(d.id);
+      }
+      return;
+    }
 
     // 1) the rush: every down lineman, plus `blitzers` linebackers/DBs nearest LOS
     const dl = defenders.filter((d) => d.defRole === "DL");
@@ -836,6 +877,7 @@ export class Game {
     this.liveTime = 0;
     this.kickMode = null;
     this.kickStage = null;
+    this.kickOp = null;
     this.kickHold = 0;
     // fresh matchup state for the new play
     for (const p of this.players) {
@@ -881,46 +923,144 @@ export class Game {
   }
 
   // ---- special teams -----------------------------------------------------
+  /** the man who receives the snap: the HOLDER on a place kick, the PUNTER
+   * himself on a punt (no holder — it's snapped straight back to him). */
+  private snapCatcher(): Player | null {
+    const t = this.possession;
+    return this.kickMode === "punt" ? this.byId(`${t}_QB`) : this.byId(`${t}_R`);
+  }
+  /** the man who strikes the ball */
+  private kickerPlayer(): Player | null {
+    return this.byId(`${this.possession}_QB`);
+  }
+
   private startKick(kind: "fg" | "punt" | "pat") {
     this.liveTime = 0;
     const dir = this.offDir();
     const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
     const b = this.ball;
+    this.kickMode = kind;
+    const cen = this.byId(`${this.possession}_CEN`);
+    const catcher = this.snapCatcher();
     b.carrier = null;
-    b.inAir = true;
     b.targetId = null;
-    b.sx = this.los - dir * 7 * YARD; // snap back to the kicker/punter
-    b.sy = WORLD_H / 2;
+    // the LONG SNAP: the ball starts in the snapper's hands and travels back to
+    // the holder (place kick) or the punter (punt). It is a real object in
+    // flight the whole time — never a dead ball parked on the turf.
+    b.sx = cen ? cen.x : this.los;
+    b.sy = cen ? cen.y : WORLD_H / 2;
+    b.tx = catcher ? catcher.x : this.los - dir * 7 * YARD;
+    b.ty = catcher ? catcher.y : WORLD_H / 2;
     b.x = b.sx;
     b.y = b.sy;
-    b.z = 0;
+    b.z = 0.6 * YARD;
     b.t = 0;
     b.elapsed = 0;
     b.tip = false;
     b.fumble = false;
     b.swatDone = false; // one in-flight deflection attempt per kick
-    b.inAir = false; // held until the kick launches (meter complete, or auto)
-    this.kickMode = kind;
-    this.kickDist = kind === "pat" ? 20 : Math.abs(goalX - b.sx) / YARD + 10;
+    b.inAir = false; // the KICK hasn't launched; the operation is running
+    this.kickOp = "snap";
+    // operation clock: snap flight, then the hold/approach before the strike.
+    // Punt ops are slower (deeper snap, catch, drop) than a place kick.
+    this.kickSnapTime = kind === "punt" ? 0.75 : 0.6;
+    this.kickOpT = 0;
+    this.kickDist = kind === "pat" ? 20 : Math.abs(goalX - b.tx) / YARD + 10;
+    this.audio.snap();
 
-    // The human kicking on-screen gets the interactive meter. The AI (and the
-    // headless sim) keep the exact RNG path below so the sim stays reproducible.
+    // The human kicking on-screen gets the interactive meter — but it only opens
+    // once the snap is actually in hand (you can't kick a ball that's in flight).
     if (this.userOnOffense() && !this.headless) {
       const kic = this.kickerRating();
       // a better kicker = a wider made-window (more forgiving aim)
       this.kickAccWin = clamp(0.3 + (kic - 75) * 0.006, 0.18, 0.55);
-      this.kickStage = "power";
+      this.kickStage = null; // opens on catch
       this.kickMeter = 0;
       this.kickMeterDir = 1;
       this.kickPower = 0;
-      this.message =
-        kind === "punt" ? "TAP: POWER" : kind === "pat" ? "PAT — TAP: POWER" : "TAP: POWER";
+      this.kickHold = 0;
+      this.message = "SNAP…";
       return;
     }
-    // AI kick: the ball sits at the spot for a real get-off window (punt
-    // operations are slower than FG) while the rush comes — then it launches.
-    this.kickHold = kind === "punt" ? 2.0 : 1.3;
+    // AI kick: hold time AFTER the catch before the strike (the rush is live).
+    this.kickHold = kind === "punt" ? 1.25 : 0.7;
     this.message = "";
+  }
+
+  /** run the snap → hold → strike operation. The ball is in the snapper's,
+   * then the holder's/punter's hands the whole way, so the thing a rusher
+   * attacks is the real strike point, not a ball lying on the ground. */
+  private updateKickOp(dt: number) {
+    const b = this.ball;
+    const kind = this.kickMode!;
+    const catcher = this.snapCatcher();
+    this.kickOpT += dt;
+    // the man receiving the snap is PLANTED at the spot — he can't be jostled
+    // downfield by the closing kicker or a collapsing line, or the strike point
+    // (the thing the rush is attacking) would slide out from under everyone
+    if (catcher) {
+      catcher.vx = 0;
+      catcher.vy = 0;
+      catcher.dvx = 0;
+      catcher.dvy = 0;
+      catcher.x = catcher.ox;
+      catcher.y = catcher.oy;
+    }
+
+    if (this.kickOp === "snap") {
+      const t = clamp(this.kickOpT / this.kickSnapTime, 0, 1);
+      // track the catcher live so the ball arrives in his hands even if he shifts
+      if (catcher) {
+        b.tx = catcher.x;
+        b.ty = catcher.y;
+      }
+      b.x = lerp(b.sx, b.tx, t);
+      b.y = lerp(b.sy, b.ty, t);
+      b.z = lerp(0.6 * YARD, kind === "punt" ? 1.3 * YARD : 0.9 * YARD, t) +
+        0.5 * YARD * Math.sin(Math.PI * t);
+      if (t >= 1) {
+        this.kickOp = "hold";
+        this.kickOpT = 0;
+        if (this.userOnOffense() && !this.headless) {
+          // snap is in — NOW the kicker can be triggered
+          this.kickStage = "power";
+          this.message =
+            kind === "punt" ? "TAP: POWER" : kind === "pat" ? "PAT — TAP: POWER" : "TAP: POWER";
+        }
+      }
+      return;
+    }
+
+    // HOLD: the ball is in hand at the strike point. On a place kick the holder
+    // spots it on the turf and the KICKER steps into it; on a punt the punter
+    // holds it at his waist and drops it onto his foot.
+    if (catcher) {
+      b.x = catcher.x;
+      b.y = catcher.y;
+      b.z = kind === "punt" ? 1.1 * YARD : 0.25 * YARD;
+    }
+    if (kind !== "punt") {
+      // the kicker takes his steps INTO the hold — this is the approach, and
+      // it's why the strike point is in front of him, not under him
+      const k = this.kickerPlayer();
+      if (k && catcher) {
+        const dur = Math.max(0.2, this.kickHold || 0.7);
+        const st = clamp(this.kickOpT / dur, 0, 1);
+        k.dvx = 0;
+        k.dvy = 0;
+        k.vx = 0;
+        k.vy = 0;
+        k.x = lerp(k.ox, catcher.x - this.offDir() * 0.7 * YARD, st);
+        k.y = lerp(k.oy, catcher.y, st);
+      }
+    }
+    if (this.kickHold > 0) {
+      this.kickHold -= dt;
+      if (this.kickHold <= 0 && !this.tryBlockKick()) {
+        const dir = this.offDir();
+        this.resolveKickAuto(kind, dir, dir > 0 ? RIGHT_GOAL : LEFT_GOAL, b);
+      }
+    }
   }
 
   /** AI / headless kick: ratings + RNG, no meter (unchanged distribution). */
@@ -930,6 +1070,11 @@ export class Game {
     goalX: number,
     b: typeof this.ball
   ) {
+    // the ball leaves the foot from wherever it was actually struck (the hold
+    // spot / the punter's drop), so a rusher who got there attacked a real point
+    b.sx = b.x;
+    b.sy = b.y;
+    this.kickOp = null;
     b.inAir = true;
     this.audio.kick();
     if (kind === "fg" || kind === "pat") {
@@ -993,9 +1138,10 @@ export class Game {
         best = p;
       }
     }
-    if (!best || bd > 2 * YARD) return false;
-    // right on the ball ≈ 80%, fading to ~15% two yards off
-    const chance = clamp(0.8 - (bd / YARD - 0.4) * 0.42, 0.12, 0.8);
+    if (!best || bd > 3 * YARD) return false;
+    // right on the strike point ≈ 80%, fading out by ~3yd. This is the payoff for
+    // beating the protection to the spot — jump the snap and you get the block.
+    const chance = clamp(0.7 - (bd / YARD - 0.4) * 0.34, 0.04, 0.7);
     if (rng() >= chance) return false;
     this.blockKick();
     return true;
@@ -1009,11 +1155,12 @@ export class Game {
     const kind = this.kickMode!;
     this.kickMode = null;
     this.kickStage = null;
+    this.kickOp = null;
     this.audio.tackle();
     if (kind === "pat") {
       this.kickGood = false;
-      this.message = "BLOCKED!";
       this.resolvePAT();
+      this.message = "PAT BLOCKED!"; // after resolvePAT — it sets "MISSED PAT"
       return;
     }
     const b = this.ball;
@@ -1042,6 +1189,9 @@ export class Game {
     const dir = this.offDir();
     const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
     const kind = this.kickMode!;
+    b.sx = b.x; // struck where the ball actually sat (hold spot / punter's drop)
+    b.sy = b.y;
+    this.kickOp = null;
     b.inAir = true;
     this.audio.kick();
     if (kind === "fg" || kind === "pat") {
@@ -1131,9 +1281,9 @@ export class Game {
         }
         if (best && bd <= SWAT_R) {
           b.swatDone = true;
-          let chance = clamp(0.55 - (fromSpot / YARD) * 0.09, 0.04, 0.55);
+          let chance = clamp(0.3 - (fromSpot / YARD) * 0.055, 0.02, 0.3);
           // a lineman still locked in his block only gets an arm free
-          if (this.neutralized(best)) chance *= 0.45;
+          if (this.neutralized(best)) chance *= 0.3;
           if (rng() < chance) return this.blockKick();
         }
       }
@@ -1144,6 +1294,7 @@ export class Game {
     const kind = this.kickMode;
     this.kickMode = null;
     this.kickStage = null;
+    this.kickOp = null;
     if (kind === "fg") this.resolveFieldGoal();
     else if (kind === "pat") this.resolvePAT();
     else this.resolvePunt();
@@ -1378,6 +1529,14 @@ export class Game {
     for (const p of this.players) {
       if (p.team !== offTeam) continue;
       if (p.role === "OL") continue; // handled in blocking
+
+      // the kick unit holds its alignment: the holder stays down over the spot
+      // and the kicker's approach is driven by the operation, not by route logic
+      if (this.kickMode && !this.ball.inAir) {
+        p.dvx = 0;
+        p.dvy = 0;
+        continue;
+      }
 
       const isCarrier = carrier?.id === p.id;
       const isUser = p.id === this.controlledId && this.userOnOffense();
@@ -1951,9 +2110,16 @@ export class Game {
         const push = (MIN - d) / 2;
         const nx = (dx / d) * push;
         const ny = (dy / d) * push;
-        // don't shove the ball carrier or the user's player — others go around
-        const aLock = a.id === this.ball.carrier || (a.controlled && this.userOnOffense());
-        const bLock = b.id === this.ball.carrier || (b.controlled && this.userOnOffense());
+        // don't shove the ball carrier, the user's player, or the kick operation
+        // (holder/punter + kicker own their spots while the ball is being struck)
+        const opLock = (p: Player) =>
+          this.kickOp !== null &&
+          p.team === this.possession &&
+          (p.id.endsWith("_QB") || p.id.endsWith("_R"));
+        const aLock =
+          a.id === this.ball.carrier || (a.controlled && this.userOnOffense()) || opLock(a);
+        const bLock =
+          b.id === this.ball.carrier || (b.controlled && this.userOnOffense()) || opLock(b);
         if (!aLock) {
           a.x += nx;
           a.y += ny;
@@ -2309,16 +2475,9 @@ export class Game {
   private updateBall(dt: number) {
     const b = this.ball;
     if (this.kickMode) {
+      // the snap→hold→strike operation runs until the ball actually leaves the foot
       if (!b.inAir) {
-        // ball is down at the spot, play live: run the AI get-off clock (the
-        // human's meter launches via fireKick instead)
-        if (this.kickHold > 0) {
-          this.kickHold -= dt;
-          if (this.kickHold <= 0 && !this.tryBlockKick()) {
-            const dir = this.offDir();
-            this.resolveKickAuto(this.kickMode, dir, dir > 0 ? RIGHT_GOAL : LEFT_GOAL, b);
-          }
-        }
+        this.updateKickOp(dt);
         return;
       }
       this.updateKick(dt);
@@ -3276,13 +3435,16 @@ export class Game {
 
     // target marker: an upper-right callout chip (offset off the body so it tags
     // the receiver without sitting on top of him or a player directly above).
-    const LBX = 15;
-    const LBY = -17;
+    // Sized for a phone at gameplay zoom: the chip has to be readable at a
+    // glance while you're reading the whole field, so it's nearly as big as the
+    // player himself (was a 16x18 chip with 14px glyphs — invisible in motion).
+    const LBX = 19;
+    const LBY = -22;
     const labelBg = new Graphics();
     labelBg
-      .roundRect(-8, -9, 16, 18, 5)
-      .fill({ color: 0x0a0e1a, alpha: 0.85 })
-      .stroke({ width: 1.5, color: COLORS.highlight });
+      .roundRect(-14, -15, 28, 30, 8)
+      .fill({ color: 0x0a0e1a, alpha: 0.92 })
+      .stroke({ width: 2.5, color: COLORS.highlight });
     labelBg.x = LBX;
     labelBg.y = LBY;
     labelBg.visible = false;
@@ -3291,7 +3453,7 @@ export class Game {
       text: p.target ?? "",
       style: {
         fontFamily: "monospace",
-        fontSize: 28,
+        fontSize: 52, // rendered big, scaled to half -> 26px on the chip, crisp
         fill: COLORS.highlight,
         fontWeight: "bold",
       },

@@ -165,7 +165,7 @@ async function kick() {
     for (let i = 0; i < N; i++) {
       try {
         await call("testNewSeries", ownYd); const before = await st(); await reseed();
-        await call("testChoose", "special", "fieldgoal"); await call("testSnap");
+        await call("testChoose", "placekick", "fieldgoal"); await call("testSnap");
         let s; for (let k = 0; k < 70; k++) { s = await st(); if (s.phase !== "live" && k > 2) break; await sleep(40); }
         n++; if (s.score.home - before.score.home === 3) good++;
       } catch { await boot(); }
@@ -179,7 +179,7 @@ async function stteams() {
   console.log("\n=== SPECIAL TEAMS — PAT / 2pt ===");
   console.log("  NFL: PAT ~95.8%, 2pt ~48%");
   let pat = 0, np = 0;
-  for (let i = 0; i < N; i++) { try { await call("testStartTry"); const b = await st(); await reseed(); await call("testChoose", "convert", "xp"); await call("testSnap"); let s; for (let k = 0; k < 60; k++) { s = await st(); if (s.phase !== "live" && k > 2) break; await sleep(40); } np++; if (s.score.home - b.score.home === 1) pat++; } catch { await boot(); } }
+  for (let i = 0; i < N; i++) { try { await call("testStartTry"); const b = await st(); await reseed(); await call("testChoose", "placekick", "xp"); await call("testSnap"); let s; for (let k = 0; k < 60; k++) { s = await st(); if (s.phase !== "live" && k > 2) break; await sleep(40); } np++; if (s.score.home - b.score.home === 1) pat++; } catch { await boot(); } }
   console.log(`  PAT   n=${np}  made ${pad(np ? Math.round(pat / np * 100) : 0, 3)}%`);
   let two = 0, nt = 0;
   for (let i = 0; i < N; i++) { try { await call("testStartTry"); const b = await st(); await reseed(); const pass = i % 2 === 1; await call("testChoose", "convert", pass ? "twoslants" : "twodive"); await call("testSnap"); if (pass) { await sleep(700); await call("testThrowOpen"); } let s; for (let k = 0; k < 70; k++) { s = await st(); if (s.phase !== "live" && k > 2) break; await sleep(40); } nt++; if (s.score.home - b.score.home === 2) two++; } catch { await boot(); } }

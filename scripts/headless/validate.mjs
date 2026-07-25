@@ -102,7 +102,7 @@ function kickCell(label, kic, N = 120) {
       g.testNewSeries(ownYd);
       const before = g.testState();
       reseed();
-      g.testChoose("special", "fieldgoal");
+      g.testChoose("placekick", "fieldgoal");
       g.testSnap();
       let s = before;
       // 340-frame budget: kicks now hold ~1.3s at the spot (live rush) before launching

@@ -36,6 +36,10 @@ export interface OffensePlay {
   hole?: number;
   /** which guard pulls to lead through the hole ("LG" | "RG"), gap scheme */
   pull?: string;
+  /** per-play alignment override, layered OVER the formation's align. Lets one
+   *  formation serve different looks — the PAT kick needs a kicker + holder
+   *  deep while the two-point plays in the same formation stay at the goal line. */
+  align?: Record<string, AlignOverride>;
   /** route per receiver slot, keyed by player id suffix */
   routes: Record<string, RouteNode[]>;
 }
