@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { OFFENSE_BASE } from "../game/plays";
 import type {
   DefenseFormation,
@@ -10,8 +10,6 @@ import type {
 type AnyFormation = OffenseFormation | DefenseFormation;
 type AnyPlay = OffensePlay | DefensePlay;
 
-const PLAYS_PER_PAGE = 6;
-
 export function PlayCall({
   formations,
   onOffense,
@@ -21,112 +19,95 @@ export function PlayCall({
   onOffense: boolean;
   onPick: (formationId: string, playId: string) => void;
 }) {
-  const [formationId, setFormationId] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
+  const [idx, setIdx] = useState(0);
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const i = Math.min(idx, formations.length - 1);
+  const formation = formations[i];
 
-  const formation = formations.find((f) => f.id === formationId) ?? null;
-  const plays = formation ? (formation.plays as AnyPlay[]) : [];
-  const pageCount = Math.max(1, Math.ceil(plays.length / PLAYS_PER_PAGE));
-  const pagePlays = plays.slice(page * PLAYS_PER_PAGE, page * PLAYS_PER_PAGE + PLAYS_PER_PAGE);
-
-  const back = () => {
-    setFormationId(null);
-    setPage(0);
+  // scroll-snap does the swiping natively (momentum, rubber-banding, snap);
+  // we only read back WHICH formation is centred so the header + dots match.
+  const onScroll = () => {
+    const el = trackRef.current;
+    if (!el) return;
+    const w = el.clientWidth || 1;
+    const n = Math.round(el.scrollLeft / w);
+    if (n !== idx) setIdx(Math.max(0, Math.min(formations.length - 1, n)));
+  };
+  const goTo = (n: number) => {
+    const el = trackRef.current;
+    const c = Math.max(0, Math.min(formations.length - 1, n));
+    setIdx(c);
+    el?.scrollTo({ left: c * (el.clientWidth || 0), behavior: "smooth" });
   };
 
-  // keyboard: 1..n selects, Backspace/Esc goes back, [ ] page
+  // keyboard mirrors the swipe: arrows change formation, digits call a play
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (e.key === "Escape" || e.key === "Backspace") {
-        if (formation) back();
-        return;
-      }
-      if (!formation) {
-        const i = parseInt(e.key, 10);
-        if (i >= 1 && i <= formations.length) setFormationId(formations[i - 1].id);
-      } else {
-        if (e.key === "[" && page > 0) setPage(page - 1);
-        if (e.key === "]" && page < pageCount - 1) setPage(page + 1);
-        const i = parseInt(e.key, 10);
-        if (i >= 1 && i <= pagePlays.length) onPick(formation.id, pagePlays[i - 1].id);
-      }
+      if (e.key === "ArrowLeft") return goTo(i - 1);
+      if (e.key === "ArrowRight") return goTo(i + 1);
+      const n = parseInt(e.key, 10);
+      const plays = formation?.plays as AnyPlay[] | undefined;
+      if (plays && n >= 1 && n <= plays.length) onPick(formation.id, plays[n - 1].id);
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [formation, formations, page, pageCount, pagePlays, onPick]);
-
-  if (!formation) {
-    return (
-      <div className="overlay playcall">
-        <div className="pc-title">
-          {onOffense ? "CHOOSE FORMATION" : "CHOOSE DEFENSE"}
-        </div>
-        <div className="pc-grid">
-          {formations.map((f, i) => (
-            <button
-              key={f.id}
-              className="pc-card form"
-              onClick={() => {
-                setFormationId(f.id);
-                setPage(0);
-              }}
-            >
-              <span className="pc-key">{i + 1}</span>
-              <FormationArt formation={f} offense={onOffense} />
-              <span className="pc-name">{f.name}</span>
-              <span className="pc-kind">{f.tag}</span>
-            </button>
-          ))}
-        </div>
-        <div className="pc-hint">Tap a formation · then pick a play</div>
-      </div>
-    );
-  }
+  });
 
   return (
     <div className="overlay playcall">
       <div className="pc-head">
-        <button className="pc-back" onClick={back}>
-          ‹ FORMATIONS
+        <button className="pc-arrow" disabled={i === 0} onClick={() => goTo(i - 1)}>
+          ‹
         </button>
-        <div className="pc-title sm">{formation.name}</div>
+        <div className="pc-title sm">
+          {formation?.name}
+          <span className="pc-tag">{formation?.tag}</span>
+        </div>
+        <button
+          className="pc-arrow"
+          disabled={i >= formations.length - 1}
+          onClick={() => goTo(i + 1)}
+        >
+          ›
+        </button>
       </div>
-      <div className="pc-grid">
-        {pagePlays.map((p, i) => (
-          <button
-            key={p.id}
-            className="pc-card"
-            onClick={() => onPick(formation.id, p.id)}
-          >
-            <span className="pc-key">{i + 1}</span>
-            <PlayArt play={p} formation={formation} offense={onOffense} />
-            <span className="pc-name">{p.name}</span>
-            <span className="pc-kind">{kindLabel(p, onOffense)}</span>
-          </button>
+
+      {/* one page per formation — every play on it is visible, no drilling in */}
+      <div className="pc-swipe" ref={trackRef} onScroll={onScroll}>
+        {formations.map((f) => (
+          <div className="pc-page" key={f.id}>
+            <div className="pc-plays">
+              {(f.plays as AnyPlay[]).map((p, n) => (
+                <button
+                  key={p.id}
+                  className="pc-card"
+                  onClick={() => onPick(f.id, p.id)}
+                >
+                  <span className="pc-key">{n + 1}</span>
+                  <PlayArt play={p} formation={f} offense={onOffense} />
+                  <span className="pc-name">{p.name}</span>
+                  <span className="pc-kind">{kindLabel(p, onOffense)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         ))}
       </div>
-      {pageCount > 1 ? (
-        <div className="pc-pager">
-          <button disabled={page === 0} onClick={() => setPage(page - 1)}>
-            ‹
-          </button>
-          <span>
-            PAGE {page + 1} / {pageCount}
-          </span>
+
+      <div className="pc-dots">
+        {formations.map((f, n) => (
           <button
-            disabled={page === pageCount - 1}
-            onClick={() => setPage(page + 1)}
-          >
-            ›
-          </button>
-        </div>
-      ) : (
-        <div className="pc-hint">Tap a play to run it</div>
-      )}
+            key={f.id}
+            className={`pc-dot${n === i ? " on" : ""}`}
+            onClick={() => goTo(n)}
+            aria-label={f.name}
+          />
+        ))}
+      </div>
+      <div className="pc-hint">Swipe for another formation · tap a play to run it</div>
     </div>
   );
 }
-
 
 const W = 120;
 const H = 80;
@@ -169,38 +150,6 @@ function offEff(formation: AnyFormation) {
     out[slot] = { lat: ov.lat ?? OFFENSE_BASE[slot].lat, fwd: ov.fwd ?? OFFENSE_BASE[slot].fwd };
   }
   return out;
-}
-
-function FormationArt({ formation, offense }: { formation: AnyFormation; offense: boolean }) {
-  if (offense) {
-    const pos = offEff(formation);
-    const pts = Object.values(pos);
-    const map = fitter(pts);
-    return (
-      <svg className="pc-art" viewBox={`0 0 ${W} ${H}`}>
-        {Object.entries(pos).map(([slot, p]) => {
-          const m = map(p.lat, p.fwd);
-          const ball = slot === "QB";
-          return (
-            <circle key={slot} cx={m.x} cy={m.y} r={ball ? 3.4 : 2.8}
-              fill={ball ? "#fff" : "#8fb8ff"} stroke={ball ? "#8fb8ff" : "none"} strokeWidth={ball ? 1.4 : 0} />
-          );
-        })}
-      </svg>
-    );
-  }
-  const front = (formation as DefenseFormation).front;
-  const map = fitter(front);
-  return (
-    <svg className="pc-art" viewBox={`0 0 ${W} ${H}`}>
-      {front.map((f) => {
-        const m = map(f.lat, f.fwd);
-        const back = f.role === "CB" || f.role === "S";
-        return <circle key={f.slot} cx={m.x} cy={m.y} r={f.slot === "MLB" ? 3.2 : 2.6}
-          fill={back ? "#ff9d9d" : "#e23b3b"} />;
-      })}
-    </svg>
-  );
 }
 
 function PlayArt({ play, formation, offense }: { play: AnyPlay; formation: AnyFormation; offense: boolean }) {

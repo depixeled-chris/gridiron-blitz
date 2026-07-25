@@ -849,3 +849,59 @@ body {
 /* landing TAILS: identical cadence, one extra swap at the last edge-on beat */
 @keyframes faceHt { 0%,9%{opacity:1} 10%,29%{opacity:0} 30%,49%{opacity:1} 50%,69%{opacity:0} 70%,89%{opacity:1} 90%,100%{opacity:0} }
 @keyframes faceTt { 0%,9%{opacity:0} 10%,29%{opacity:1} 30%,49%{opacity:0} 50%,69%{opacity:1} 70%,89%{opacity:0} 90%,100%{opacity:1} }
+
+/* ---- playcall: one swipeable page per formation ----------------------- */
+.pc-head { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.pc-arrow {
+  background: rgba(24, 35, 63, 0.9);
+  border: 1px solid var(--line);
+  color: #eef2fb;
+  border-radius: 8px;
+  width: 30px; height: 30px;
+  font-size: 17px; line-height: 1;
+  cursor: pointer;
+}
+.pc-arrow:disabled { opacity: 0.3; }
+.pc-tag { margin-left: 8px; opacity: 0.6; font-size: 0.72em; letter-spacing: 0.08em; }
+
+.pc-swipe {
+  display: flex;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.pc-swipe::-webkit-scrollbar { display: none; }
+.pc-page {
+  flex: 0 0 100%;
+  min-width: 100%;
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+}
+/* every play on the page — wraps instead of paging, so nothing is hidden */
+.pc-plays {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-content: flex-start;
+  gap: clamp(5px, 1vw, 10px);
+  padding: 2px clamp(6px, 1.5vw, 14px);
+  max-height: clamp(150px, 34vh, 300px);
+  overflow-y: auto;
+}
+.pc-plays .pc-card {
+  flex: 0 0 auto;
+  width: clamp(84px, 13vw, 132px);
+  max-width: none;
+}
+.pc-dots { display: flex; justify-content: center; gap: 6px; margin-top: 6px; }
+.pc-dot {
+  width: 7px; height: 7px; padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(200, 216, 255, 0.5);
+  background: transparent;
+  cursor: pointer;
+}
+.pc-dot.on { background: #ffe600; border-color: #ffe600; }
