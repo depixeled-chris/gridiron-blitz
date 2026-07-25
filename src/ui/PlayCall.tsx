@@ -249,16 +249,31 @@ function PlayArt({ play, formation, offense }: { play: AnyPlay; formation: AnyFo
   const dp = play as DefensePlay;
   const dl = front.filter((f) => f.role === "DL");
   const lbs = front.filter((f) => f.role === "LB").sort((a, b) => Math.abs(a.lat) - Math.abs(b.lat));
-  const rush = new Set([...dl, ...lbs.slice(0, dp.blitzers)].map((f) => f.slot));
+  // a named blitz package sends SPECIFIC men — draw those, not "the N nearest
+  // the middle" (that showed the wrong arrows for every per-front pressure)
+  const rush = new Set(
+    dp.blitzSlots?.length
+      ? [...dl.map((f) => f.slot), ...dp.blitzSlots]
+      : [...dl, ...lbs.slice(0, dp.blitzers)].map((f) => f.slot)
+  );
 
   type Zone = { lat: number; fwd: number; deep: boolean };
   const zones: Zone[] = [];
-  if (dp.coverage !== "man") {
-    const nDeep = dp.coverage === "cover2" ? 2 : dp.coverage === "cover3" ? 3 : 4;
-    const deepFwd = dp.coverage === "cover4" ? 14 : 16;
-    for (let i = 0; i < nDeep; i++) zones.push({ lat: (i / (nDeep - 1) - 0.5) * 18, fwd: deepFwd, deep: true });
-    const nUnder = Math.max(0, 11 - rush.size - nDeep);
-    for (let i = 0; i < nUnder; i++) zones.push({ lat: (nUnder === 1 ? 0 : i / (nUnder - 1) - 0.5) * 20, fwd: 6.5, deep: false });
+  // man-under shells show ONLY their deep zones (the underneath is man, so
+  // drawing underneath bubbles there would be a lie); cover 0 shows none
+  const DEEP_N: Record<string, number> = {
+    cover2: 2, cover3: 3, cover4: 4, cover1: 1, cover2man: 2, cover3man: 3,
+  };
+  const manUnder = dp.coverage === "cover1" || dp.coverage === "cover2man" || dp.coverage === "cover3man";
+  const nDeep = DEEP_N[dp.coverage] ?? 0;
+  if (nDeep > 0) {
+    const deepFwd = dp.coverage === "cover4" ? 14 : dp.coverage === "cover3man" ? 20 : dp.coverage === "cover1" ? 18 : 16;
+    for (let i = 0; i < nDeep; i++)
+      zones.push({ lat: (nDeep === 1 ? 0 : i / (nDeep - 1) - 0.5) * 18, fwd: deepFwd, deep: true });
+    if (!manUnder) {
+      const nUnder = Math.max(0, 11 - rush.size - nDeep);
+      for (let i = 0; i < nUnder; i++) zones.push({ lat: (nUnder === 1 ? 0 : i / (nUnder - 1) - 0.5) * 20, fwd: 6.5, deep: false });
+    }
   }
   const map = fitter([...front, ...zones]);
   return (

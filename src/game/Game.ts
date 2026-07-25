@@ -401,7 +401,10 @@ export class Game {
       if (aggro.length) call = pick(aggro); // crowd the line
     } else {
       const sane = plays.filter(
-        (p) => p.id !== "prevent" && !(long && p.id === "allout")
+        // don't empty the coverage on long down-and-distance. (Checked by
+        // blitzer COUNT, not by id: every front now names its own all-out
+        // call — "allout43", "alloutnickel" — so an id match never fired.)
+        (p) => p.id !== "prevent" && !(long && p.blitzers >= 3)
       );
       if (sane.length) call = pick(sane);
     }
@@ -767,15 +770,27 @@ export class Game {
       d.job = "rush";
       this.rushers.add(d.id);
     }
-    const blitzPool = defenders
-      .filter((d) => d.defRole === "LB")
-      .sort((a, b) => Math.abs(a.oy - midY) - Math.abs(b.oy - midY));
-    const allPool = blitzPool.concat(
-      defenders.filter((d) => d.defRole === "S").sort((a, b) => a.ox * dir - b.ox * dir)
-    );
-    for (let i = 0; i < play.blitzers && i < allPool.length; i++) {
-      allPool[i].job = "rush";
-      this.rushers.add(allPool[i].id);
+    // a NAMED blitz package sends specific men (this front's own pressure look);
+    // otherwise fall back to "the N nearest the middle"
+    if (play.blitzSlots?.length) {
+      for (const slot of play.blitzSlots) {
+        const d = defenders.find((x) => x.id.endsWith(`_${slot}`));
+        if (d) {
+          d.job = "rush";
+          this.rushers.add(d.id);
+        }
+      }
+    } else {
+      const blitzPool = defenders
+        .filter((d) => d.defRole === "LB")
+        .sort((a, b) => Math.abs(a.oy - midY) - Math.abs(b.oy - midY));
+      const allPool = blitzPool.concat(
+        defenders.filter((d) => d.defRole === "S").sort((a, b) => a.ox * dir - b.ox * dir)
+      );
+      for (let i = 0; i < play.blitzers && i < allPool.length; i++) {
+        allPool[i].job = "rush";
+        this.rushers.add(allPool[i].id);
+      }
     }
 
     // run-fit gaps: every front-seven defender owns a lane across the front,
@@ -840,6 +855,28 @@ export class Game {
 
     if (play.coverage === "man") {
       assignMan(cover, true);
+    } else if (play.coverage === "cover0") {
+      // FULL MAN: no help anywhere. Everyone covers a man; anyone left over
+      // comes on the rush rather than loafing in a spy zone.
+      assignMan(cover, false);
+      for (const d of cover) {
+        if (d.job === "man") continue;
+        d.job = "rush";
+        this.rushers.add(d.id);
+      }
+    } else if (play.coverage === "cover1" || play.coverage === "cover2man") {
+      // MAN FREE / TWO-MAN UNDER: man everywhere with one or two safeties
+      // capping it. The deep men are always the safeties when there are any.
+      const nDeep = play.coverage === "cover1" ? 1 : 2;
+      const forDeep = [...cover].sort(
+        (a, b) =>
+          (a.defRole === "S" ? 0 : 1) - (b.defRole === "S" ? 0 : 1) ||
+          (b.ox - a.ox) * dir
+      );
+      const deep = forDeep.slice(0, Math.min(nDeep, forDeep.length));
+      const under = cover.filter((d) => !deep.includes(d));
+      spread(deep, nDeep === 1 ? 18 : 16, nDeep === 1 ? 0 : 11);
+      assignMan(under, true);
     } else if (play.coverage === "cover3man") {
       // THREE DEEP, MAN UNDER: three deep thirds so nothing gets over the top,
       // and everyone underneath travels with a man. Plays tight like man but

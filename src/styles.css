@@ -354,13 +354,19 @@ body {
   width: 100%;
   max-width: 1120px;
   height: clamp(112px, 20vh, 168px);
+  /* a full defensive playbook is a dozen-plus calls — let the strip scroll
+     sideways rather than squeezing every card down to an unreadable sliver */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
 }
 .pc-card {
   position: relative;
   /* equal-width cells in the row; max-width stops one card (special teams) from
      ballooning to the full width */
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 1 0 auto;
+  min-width: clamp(96px, 12vw, 150px);
   max-width: 200px;
   background: linear-gradient(180deg, #18233f, #0f1830);
   border: 1px solid var(--line);

@@ -1,4 +1,5 @@
 import type {
+  Coverage,
   DefenseFormation,
   DefensePlay,
   OffenseFormation,
@@ -279,7 +280,10 @@ const COV: Record<string, DefensePlay> = {
   cover2: { id: "cover2", name: "COVER 2", coverage: "cover2", blitzers: 0 },
   cover3: { id: "cover3", name: "COVER 3", coverage: "cover3", blitzers: 0 },
   cover4: { id: "cover4", name: "COVER 4", coverage: "cover4", blitzers: 0 },
-  // three deep thirds with man underneath — every front carries this call
+  // man-family shells — every front carries all of these
+  cover0: { id: "cover0", name: "FULL MAN (COVER 0)", coverage: "cover0", blitzers: 0, press: 0.9 },
+  cover1: { id: "cover1", name: "MAN FREE (COVER 1)", coverage: "cover1", blitzers: 0, press: 0.8 },
+  cover2man: { id: "cover2man", name: "COVER 2 MAN UNDER", coverage: "cover2man", blitzers: 0, press: 0.7 },
   cover3man: { id: "cover3man", name: "COVER 3 MAN UNDER", coverage: "cover3man", blitzers: 0, press: 0.6 },
   zoneblitz: { id: "zoneblitz", name: "ZONE BLITZ", coverage: "cover3", blitzers: 2 },
   fireblitz: { id: "fireblitz", name: "FIRE ZONE", coverage: "cover2", blitzers: 2 },
@@ -300,8 +304,76 @@ const ST: Record<string, DefensePlay> = {
 const ST_BLOCK_MENU = [ST.blockMiddle, ST.blockEdge, ST.blockSafe];
 const ST_RETURN_MENU = [ST.returnUp, ST.puntBlock];
 
-const PASS_MENU = [COV.man, COV.cover2, COV.cover3, COV.cover3man, COV.cover4, COV.zoneblitz, COV.fireblitz, COV.manblitz, COV.allout, COV.prevent];
-const RUN_MENU = [COV.man, COV.cover2, COV.cover3, COV.cover3man, COV.manblitz, COV.zoneblitz, COV.fireblitz, COV.allout];
+// Every front carries the same COVERAGE core — full zone shells (cover 2/3/4),
+// full man, man-under variants — so any coverage can be called from any
+// personnel. What differs per front is the BLITZ PACKAGE below.
+const CORE = [
+  COV.cover2, // full zone, 2 deep
+  COV.cover3, // full zone, 3 deep
+  COV.cover4, // full zone, quarters
+  COV.man, // man press
+  COV.cover0, // FULL MAN, no help
+  COV.cover1, // man free
+  COV.cover2man, // 2 deep, man under
+  COV.cover3man, // 3 deep, man under
+];
+const CORE_RUN = [COV.cover2, COV.cover3, COV.man, COV.cover0, COV.cover1, COV.cover2man, COV.cover3man];
+
+/** a named pressure: who comes, and what coverage plays behind it */
+const BZ = (
+  id: string,
+  name: string,
+  coverage: Coverage,
+  blitzSlots: string[],
+  press?: number
+): DefensePlay => ({ id, name, coverage, blitzers: blitzSlots.length, blitzSlots, press });
+
+// ---- per-front BLITZ PACKAGES -----------------------------------------
+// Each front sends its own men, and each pressure plays a DIFFERENT coverage
+// behind it — so a blitz is a real choice (who comes, and what it costs you)
+// rather than one generic "send N guys".
+const BLITZ: Record<string, DefensePlay[]> = {
+  fourthree: [
+    BZ("mikeblitz", "MIKE BLITZ", "cover3", ["MLB"]),
+    BZ("doubleA", "DOUBLE A GAP", "cover1", ["MLB", "WLB"]),
+    BZ("sammyfire", "SAM FIRE ZONE", "cover3", ["SLB"]),
+    BZ("safetyblitz", "STRONG SAFETY BLITZ", "cover3man", ["SS"]),
+    BZ("allout43", "ALL-OUT BLITZ", "cover0", ["MLB", "WLB", "SLB"], 0.7),
+  ],
+  threefour: [
+    BZ("edge34", "OLB EDGE", "cover3", ["OLB1"]),
+    BZ("overload34", "OVERLOAD LEFT", "cover2", ["OLB1", "ILB1"]),
+    BZ("doubleA34", "DOUBLE A GAP", "cover1", ["ILB1", "ILB2"]),
+    BZ("smoke34", "SMOKE (BOTH OLBs)", "cover3man", ["OLB1", "OLB2"]),
+    BZ("allout34", "ALL-OUT BLITZ", "cover0", ["OLB1", "OLB2", "ILB1"], 0.7),
+  ],
+  nickel: [
+    BZ("nickelfire", "NICKEL FIRE", "cover3", ["NB"]),
+    BZ("mikenickel", "MIKE + NICKEL", "cover2man", ["MLB", "NB"]),
+    BZ("willblitz", "WILL BLITZ", "cover3", ["WLB"]),
+    BZ("safetynickel", "SAFETY PRESSURE", "cover1", ["SS"]),
+    BZ("alloutnickel", "ALL-OUT BLITZ", "cover0", ["MLB", "WLB", "NB"], 0.7),
+  ],
+  dime: [
+    BZ("dimefire", "DIME FIRE", "cover3", ["NB"]),
+    BZ("dbblitz", "DOUBLE DB BLITZ", "cover2man", ["NB", "DB4"]),
+    BZ("mikedime", "MIKE BLITZ", "cover3man", ["MLB"]),
+    BZ("safetydime", "SAFETY PRESSURE", "cover1", ["SS"]),
+    BZ("alloutdime", "ALL-OUT BLITZ", "cover0", ["MLB", "NB", "DB4"], 0.7),
+  ],
+  fivetwo: [
+    BZ("willfire52", "WILL FIRE", "cover3", ["WLB"]),
+    BZ("samfire52", "SAM FIRE", "cover3", ["SLB"]),
+    BZ("bothbackers52", "BOTH BACKERS", "cover1", ["WLB", "SLB"]),
+    BZ("safety52", "SAFETY BLITZ", "cover3man", ["SS"]),
+    BZ("allout52", "ALL-OUT BLITZ", "cover0", ["WLB", "SLB", "SS"], 0.7),
+  ],
+  goalline: [
+    BZ("mikegl", "MIKE BLITZ", "cover1", ["MLB"]),
+    BZ("bothglt", "SAM + WILL", "cover0", ["SLB", "WLB"]),
+    BZ("alloutgl", "ALL-OUT BLITZ", "cover0", ["MLB", "SLB", "WLB"], 0.7),
+  ],
+};
 
 const D = (slot: string, role: "DL" | "LB" | "CB" | "S", fwd: number, lat: number, num: number) =>
   ({ slot, role, fwd, lat, num });
@@ -315,7 +387,7 @@ export const DEFENSE_FORMATIONS: DefenseFormation[] = [
       D("CB1", "CB", 5, -10, 24), D("CB2", "CB", 5, 10, 21),
       D("FS", "S", 11, -5, 31), D("SS", "S", 10, 5, 33),
     ],
-    plays: PASS_MENU,
+    plays: [...CORE, ...BLITZ.fourthree, COV.prevent],
   },
   {
     id: "threefour", name: "3-4", tag: "VERSATILE",
@@ -325,7 +397,7 @@ export const DEFENSE_FORMATIONS: DefenseFormation[] = [
       D("CB1", "CB", 5, -10, 24), D("CB2", "CB", 5, 10, 21),
       D("FS", "S", 11, -4, 31), D("SS", "S", 10, 4, 33),
     ],
-    plays: PASS_MENU,
+    plays: [...CORE, ...BLITZ.threefour, COV.prevent],
   },
   {
     id: "nickel", name: "NICKEL", tag: "PASS D",
@@ -335,7 +407,7 @@ export const DEFENSE_FORMATIONS: DefenseFormation[] = [
       D("CB1", "CB", 5, -10, 24), D("CB2", "CB", 5, 10, 21), D("NB", "CB", 5, 5, 27),
       D("FS", "S", 12, -5, 31), D("SS", "S", 11, 5, 33),
     ],
-    plays: PASS_MENU,
+    plays: [...CORE, ...BLITZ.nickel, COV.prevent],
   },
   {
     id: "dime", name: "DIME", tag: "DEEP PASS D",
@@ -345,7 +417,7 @@ export const DEFENSE_FORMATIONS: DefenseFormation[] = [
       D("CB1", "CB", 5, -10, 24), D("CB2", "CB", 5, 10, 21), D("NB", "CB", 5, -5, 27), D("DB4", "CB", 5, 5, 28),
       D("FS", "S", 12, -5, 31), D("SS", "S", 12, 5, 33),
     ],
-    plays: PASS_MENU,
+    plays: [...CORE, ...BLITZ.dime, COV.prevent],
   },
   {
     id: "fivetwo", name: "5-2", tag: "RUN STUFF",
@@ -355,7 +427,7 @@ export const DEFENSE_FORMATIONS: DefenseFormation[] = [
       D("CB1", "CB", 5, -10, 24), D("CB2", "CB", 5, 10, 21),
       D("FS", "S", 11, -4, 31), D("SS", "S", 10, 4, 33),
     ],
-    plays: RUN_MENU,
+    plays: [...CORE_RUN, ...BLITZ.fivetwo],
   },
   {
     id: "goalline", name: "GOAL LINE", tag: "SHORT YDG",
@@ -364,7 +436,7 @@ export const DEFENSE_FORMATIONS: DefenseFormation[] = [
       D("WLB", "LB", 3, -4, 54), D("MLB", "LB", 3, 0, 52), D("SLB", "LB", 3, 4, 58),
       D("CB1", "CB", 4, -9, 24), D("CB2", "CB", 4, 9, 21),
     ],
-    plays: RUN_MENU,
+    plays: [...CORE_RUN, ...BLITZ.goalline],
   },
   // ---- special teams defense: a unit per instance ------------------------
   {

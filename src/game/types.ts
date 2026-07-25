@@ -44,8 +44,22 @@ export interface OffensePlay {
   routes: Record<string, RouteNode[]>;
 }
 
-/** "cover3man" = three deep zone thirds with MAN coverage underneath */
-export type Coverage = "man" | "cover2" | "cover3" | "cover4" | "cover3man";
+/** Coverage shells.
+ *  man      — man press, leftovers spy the middle
+ *  cover0   — FULL MAN: everyone in man, no deep help at all
+ *  cover1   — man free: man under with ONE deep safety over the top
+ *  cover2/3/4 — full zone shells (2 deep / 3 deep / quarters)
+ *  cover3man — three deep zone thirds with MAN underneath
+ *  cover2man — two deep zone halves with MAN underneath */
+export type Coverage =
+  | "man"
+  | "cover0"
+  | "cover1"
+  | "cover2"
+  | "cover3"
+  | "cover4"
+  | "cover3man"
+  | "cover2man";
 
 export interface DefensePlay {
   id: string;
@@ -53,6 +67,10 @@ export interface DefensePlay {
   coverage: Coverage;
   /** extra rushers sent beyond the down linemen (linebackers/DBs) */
   blitzers: number;
+  /** the SPECIFIC slots sent on this blitz (e.g. ["SLB","SS"]). Takes precedence
+   *  over `blitzers` — this is what makes a front's blitz package its own:
+   *  a 3-4 sends its OLBs off the edge, a nickel sends the slot corner. */
+  blitzSlots?: string[];
   /** press/jam tightness for man, 0..1 */
   press?: number;
 }
