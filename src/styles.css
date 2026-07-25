@@ -802,27 +802,50 @@ body {
 .ws-unit { font-size: clamp(8px, 1.2vh, 10px); opacity: 0.7; letter-spacing: 0.06em; }
 .ws-arrow { font-size: clamp(10px, 1.6vh, 14px); color: #ffd34d; }
 
-/* ---- coin: two real faces spun in 3D --------------------------------- */
-.toss-coin-wrap { perspective: 700px; margin: 14px auto 10px; width: 78px; height: 78px; }
-.toss-coin {
+
+/* ---- coin flip: squash to the edge, swap the face while it's invisible --
+   No 3D, no backface tricks. The squash and BOTH faces are driven by the same
+   1s timeline, so the tumble can never disagree with the result it lands on. */
+.coin {
   position: relative;
-  width: 78px; height: 78px;
-  transform-style: preserve-3d;
-  transform: rotateX(0deg);
+  width: 76px; height: 76px;
+  margin: 14px auto 10px;
 }
-.toss-coin.spun { animation: tossflip 1.05s cubic-bezier(0.15, 0.6, 0.2, 1) forwards; }
-.toss-coin .face {
+.coin-face {
   position: absolute; inset: 0;
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-weight: 900; font-size: 36px; color: #4a3402;
+  font-weight: 900; font-size: 34px; color: #4a3402;
   background: radial-gradient(circle at 34% 28%, #ffe9a3, #d9a520 62%, #9c7414);
-  box-shadow: inset 0 0 0 3px rgba(120, 88, 12, 0.55), 0 4px 14px rgba(0, 0, 0, 0.45);
-  backface-visibility: hidden;
+  box-shadow: inset 0 0 0 3px rgba(120, 88, 12, 0.5), 0 4px 12px rgba(0, 0, 0, 0.45);
 }
-.toss-coin .face.t { transform: rotateX(180deg); }
-@keyframes tossflip {
-  0%   { transform: translateY(0) scale(0.8) rotateX(0deg); }
-  55%  { transform: translateY(-30px) scale(1.06) rotateX(calc(var(--end) * 0.62)); }
-  100% { transform: translateY(0) scale(1) rotateX(var(--end)); }
+/* resting state before the spin: show the landed face */
+.coin .ft { opacity: 0; }
+.coin.tails .fh { opacity: 0; }
+.coin.tails .ft { opacity: 1; }
+
+.coin.spun { animation: coinsquash 1s ease-in-out 1; }
+.coin.spun .fh { animation: faceH 1s step-end 1; }
+.coin.spun .ft { animation: faceT 1s step-end 1; }
+.coin.tails.spun .fh { animation: faceHt 1s step-end 1; }
+.coin.tails.spun .ft { animation: faceTt 1s step-end 1; }
+
+@keyframes coinsquash {
+  0%   { transform: scaleY(1)    translateY(0); }
+  10%  { transform: scaleY(0.06) translateY(-10px); }
+  20%  { transform: scaleY(1)    translateY(-16px); }
+  30%  { transform: scaleY(0.06) translateY(-20px); }
+  40%  { transform: scaleY(1)    translateY(-22px); }
+  50%  { transform: scaleY(0.06) translateY(-20px); }
+  60%  { transform: scaleY(1)    translateY(-16px); }
+  70%  { transform: scaleY(0.06) translateY(-8px); }
+  80%  { transform: scaleY(1)    translateY(0); }
+  90%  { transform: scaleY(0.14) translateY(2px); }
+  100% { transform: scaleY(1)    translateY(0); }
 }
+/* landing HEADS: face swaps at each edge-on moment, ending on H */
+@keyframes faceH { 0%,9%{opacity:1} 10%,29%{opacity:0} 30%,49%{opacity:1} 50%,69%{opacity:0} 70%,89%{opacity:1} 90%,100%{opacity:1} }
+@keyframes faceT { 0%,9%{opacity:0} 10%,29%{opacity:1} 30%,49%{opacity:0} 50%,69%{opacity:1} 70%,89%{opacity:0} 90%,100%{opacity:0} }
+/* landing TAILS: identical cadence, one extra swap at the last edge-on beat */
+@keyframes faceHt { 0%,9%{opacity:1} 10%,29%{opacity:0} 30%,49%{opacity:1} 50%,69%{opacity:0} 70%,89%{opacity:1} 90%,100%{opacity:0} }
+@keyframes faceTt { 0%,9%{opacity:0} 10%,29%{opacity:1} 30%,49%{opacity:0} 50%,69%{opacity:1} 70%,89%{opacity:0} 90%,100%{opacity:1} }

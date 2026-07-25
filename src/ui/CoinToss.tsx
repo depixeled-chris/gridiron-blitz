@@ -52,20 +52,13 @@ export function CoinToss({
           </>
         ) : (
           <>
-            {/* A REAL two-sided coin: heads on the front, tails on the back,
-                spun in 3D. Which face you see is a consequence of the actual
-                rotation, and the rotation ENDS on the result — so the tumble
-                and the outcome can't disagree. */}
-            <div className="toss-coin-wrap">
-              <div
-                className={`toss-coin${spin ? " spun" : ""}`}
-                style={{
-                  ["--end" as string]: `${1440 + (result.flip === "tails" ? 180 : 0)}deg`,
-                }}
-              >
-                <span className="face h">H</span>
-                <span className="face t">T</span>
-              </div>
+            {/* Squash flip: the coin compresses to its edge and the face
+                swaps while it's edge-on and invisible. Both faces run off the
+                SAME keyframe timeline as the squash, so they cannot desync,
+                and the timeline ends on the actual result. */}
+            <div className={`coin ${result.flip}${spin ? " spun" : ""}`}>
+              <span className="coin-face fh">H</span>
+              <span className="coin-face ft">T</span>
             </div>
             <div className="toss-sub">
               {result.flip.toUpperCase()} —{" "}
