@@ -76,6 +76,8 @@ const OFF_FORM: FormSpot[] = [
   { slot: "C", role: "TE", num: 84, target: "3" },
 ];
 
+/** formations whose snap is a real gun snap (back to a QB off the line) */
+const GUN_FORMS = new Set(["shotgun", "spread"]);
 /** defensive special-teams units — shown only against a kick */
 const ST_DEF_IDS = new Set(["fgblock", "puntreturn"]);
 /** the defensive unit that answers each kind of kick */
@@ -148,6 +150,8 @@ export class Game {
   private kickOp: "snap" | "hold" | null = null;
   private kickOpT = 0;
   private kickSnapTime = 0.6;
+  /** this snap is getting away from the snapper (rolled at the snap) */
+  private kickBadSnap = false;
   // point-after state: a try is pending after a TD; conversion is the active attempt
   private tryPending = false;
   private tryMode = false;
@@ -920,6 +924,14 @@ export class Game {
     }
     this.setControlFlags();
     this.message = "";
+
+    // A SHOTGUN snap is a long snap too — it can get away from the center.
+    // (Keyed off the formation, not the QB's drawn depth: every formation here
+    // aligns him at the same 3yd, so only the CALL says it's a gun snap.)
+    if (GUN_FORMS.has(this.offFormation.id)) {
+      const taker = this.carrier();
+      if (taker && this.snapBotched(5)) this.looseSnap(taker);
+    }
   }
 
   // ---- special teams -----------------------------------------------------
@@ -932,6 +944,73 @@ export class Game {
   /** the man who strikes the ball */
   private kickerPlayer(): Player | null {
     return this.byId(`${this.possession}_QB`);
+  }
+
+  /** Does this snap get away from the snapper? A long snapper reps these all
+   * week, so it's rare — roughly 1 in 50 at league-average awareness, less for
+   * a good one — but it scales with how far back the ball has to travel
+   * (shotgun < place kick < punt). */
+  private snapBotched(distYds: number): boolean {
+    const cen = this.byId(`${this.possession}_CEN`);
+    const awr = cen ? rate(cen.rat, "AWR") : 75;
+    const base = 0.014 + Math.max(0, distYds - 7) * 0.0009;
+    const chance = clamp(base * (1 + (75 - awr) * 0.03), 0.004, 0.06);
+    return rng() < chance;
+  }
+
+  /** the snap gets away: a live loose ball at the intended catcher's feet */
+  private looseSnap(near: Player) {
+    const b = this.ball;
+    this.kickMode = null;
+    this.kickOp = null;
+    this.kickStage = null;
+    this.kickHold = 0;
+    near.hasBall = false;
+    b.carrier = null;
+    b.inAir = true;
+    b.tip = true;
+    b.fumble = true;
+    b.targetId = null;
+    for (const p of this.players) p.tipTried = false;
+    b.x = near.x; // it's loose right where he was reaching for it
+    b.y = near.y;
+    b.sx = b.x;
+    b.sy = b.y;
+    b.tx = clamp(b.x + (rng() - 0.5) * 5 * YARD, LEFT_GOAL, RIGHT_GOAL);
+    b.ty = clamp(b.y + (rng() - 0.5) * 5 * YARD, SIDELINE, WORLD_H - SIDELINE);
+    b.peak = 0.7 * YARD;
+    b.ftime = 0.7;
+    b.elapsed = 0;
+    b.t = 0;
+    this.message = "BAD SNAP!";
+    this.audio.tackle();
+  }
+
+  /** During the operation the man with the ball — holder, punter, or the kicker
+   * once he's on it — is a ball carrier like any other: get to him and the play
+   * is over at that spot (a safety if it's in his own end zone). */
+  private kickOpTackle() {
+    const men = [this.snapCatcher(), this.kickerPlayer()].filter(
+      (m): m is Player => m !== null
+    );
+    for (const p of this.players) {
+      if (p.team === this.possession) continue;
+      if (this.neutralized(p) || p.stun > 0) continue;
+      for (const m of men) {
+        if (dist(p.x, p.y, m.x, m.y) >= TACKLE_R) continue;
+        const b = this.ball;
+        this.kickMode = null;
+        this.kickOp = null;
+        this.kickStage = null;
+        b.inAir = false;
+        b.z = 0;
+        this.audio.tackle();
+        const dir = this.offDir();
+        const ownGoal = dir > 0 ? LEFT_GOAL : RIGHT_GOAL;
+        if (dir > 0 ? m.x <= ownGoal : m.x >= ownGoal) return this.safety();
+        return this.endPlay({ type: "tackle", spotX: m.x, spotY: m.y });
+      }
+    }
   }
 
   private startKick(kind: "fg" | "punt" | "pat") {
@@ -961,6 +1040,13 @@ export class Game {
     b.swatDone = false; // one in-flight deflection attempt per kick
     b.inAir = false; // the KICK hasn't launched; the operation is running
     this.kickOp = "snap";
+    // FG, PAT and punt are ALL long snaps — and a long snap can get away
+    this.kickBadSnap = this.snapBotched(kind === "punt" ? 13 : 7);
+    if (this.kickBadSnap) {
+      // it sails — high and off-line, so it's visibly a bad snap before it lands
+      b.tx += (rng() - 0.5) * 4 * YARD;
+      b.ty += (rng() - 0.5) * 4 * YARD;
+    }
     // operation clock: snap flight, then the hold/approach before the strike.
     // Punt ops are slower (deeper snap, catch, drop) than a place kick.
     this.kickSnapTime = kind === "punt" ? 0.75 : 0.6;
@@ -1019,6 +1105,8 @@ export class Game {
       b.z = lerp(0.6 * YARD, kind === "punt" ? 1.3 * YARD : 0.9 * YARD, t) +
         0.5 * YARD * Math.sin(Math.PI * t);
       if (t >= 1) {
+        // it got away from him — live ball, no kick
+        if (this.kickBadSnap && catcher) return this.looseSnap(catcher);
         this.kickOp = "hold";
         this.kickOpT = 0;
         if (this.userOnOffense() && !this.headless) {
@@ -2898,7 +2986,11 @@ export class Game {
 
   private checkTackleAndScore() {
     const c = this.carrier();
-    if (!c) return;
+    if (!c) {
+      // a kick operation has a man holding the ball — he's tacklable too
+      if (this.kickMode && this.kickOp === "hold") this.kickOpTackle();
+      return;
+    }
     const dir = this.offDir();
     const attackGoal = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
     const ownGoal = dir > 0 ? LEFT_GOAL : RIGHT_GOAL;
