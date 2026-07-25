@@ -1,3 +1,3 @@
 // Bump this when shipping a fix you want to confirm reached the device.
 // Shown tiny in the corner so you can tell stale cache from a real bug.
-export const BUILD = "v50-playcall-grid";
+export const BUILD = "v51-st-unrestricted";

@@ -79,7 +79,7 @@ const OFF_FORM: FormSpot[] = [
 /** formations whose snap is a real gun snap (back to a QB off the line) */
 const GUN_FORMS = new Set(["shotgun", "spread"]);
 /** defensive special-teams units — shown only against a kick */
-const ST_DEF_IDS = new Set(["fgblock", "puntreturn"]);
+const ST_DEF_IDS = new Set(["fgblock", "puntreturn", "kickreturn"]);
 /** the defensive unit that answers each kind of kick */
 const ST_DEF_FOR = (kind: string) => (kind === "punt" ? "puntreturn" : "fgblock");
 
@@ -591,19 +591,13 @@ export class Game {
   }
 
   availableFormations() {
-    if (!this.userOnOffense()) {
-      // defending a point-after: only the kick-block / return units make sense
-      if (this.tryMode) return DEFENSE_FORMATIONS.filter((f) => ST_DEF_IDS.has(f.id));
-      return DEFENSE_FORMATIONS.filter((f) => !ST_DEF_IDS.has(f.id));
-    }
-    // a try: kick the PAT off the place-kick unit, or go for two from a REGULAR
-    // formation (going for two is an ordinary play, not a special-teams look)
-    if (this.tryMode) {
-      return OFFENSE_FORMATIONS.filter(
-        (f) => f.id === "placekick" || (f.id !== "puntunit" && f.id !== "convert")
-      );
-    }
-    return OFFENSE_FORMATIONS.filter((f) => f.id !== "convert");
+    // Special teams are just formations. You can line up in a punt look on
+    // first down or answer a run with the FG-block front if you want to — the
+    // menu doesn't police it. (The KICKOFF unit is the one exception: a free
+    // kick isn't a scrimmage down, so it only appears when one is actually
+    // being kicked, never as a play call.)
+    if (!this.userOnOffense()) return DEFENSE_FORMATIONS;
+    return OFFENSE_FORMATIONS.filter((f) => f.id !== "kickoffunit");
   }
 
   // ---- test harness hooks (drive the engine directly, bypassing the menu and
