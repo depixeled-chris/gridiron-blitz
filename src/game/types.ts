@@ -12,6 +12,7 @@ export type Role =
 
 export type Phase =
   | "menu"
+  | "toss"
   | "playcall"
   | "presnap"
   | "live"
@@ -29,7 +30,7 @@ export interface RouteNode {
 export interface OffensePlay {
   id: string;
   name: string;
-  kind: "run" | "pass" | "fg" | "punt" | "pat";
+  kind: "run" | "pass" | "fg" | "punt" | "pat" | "kickoff";
   /** which skill player carries on a run play */
   runner?: "RB" | "QB";
   /** designed run hole: lateral yards from center toward the play side */

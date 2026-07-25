@@ -131,7 +131,7 @@ export class Game {
   private defFormation: DefenseFormation = DEFENSE_FORMATIONS[0];
   private offPlay: OffensePlay = OFFENSE_FORMATIONS[0].plays[0];
   private defPlay: DefensePlay = DEFENSE_FORMATIONS[0].plays[0];
-  private kickMode: "fg" | "punt" | "pat" | null = null;
+  private kickMode: "fg" | "punt" | "pat" | "kickoff" | null = null;
   private kickGood = false;
   // interactive kick meter (only when the human kicks; AI/headless auto-resolve).
   // Stage "power": a gauge oscillates 0..1, tap locks leg power. Stage "accuracy":
@@ -262,8 +262,37 @@ export class Game {
     this.clock = QUARTER_SECONDS;
     this.possession = "home";
     this.setNewSeries(LEFT_GOAL + 20 * YARD);
-    this.message = "1ST & 10";
-    this.goToPlaycall();
+    // a game opens with the TOSS — the winner receives, and the loser kicks off
+    this.tossResult = null;
+    this.phase = "toss";
+    this.message = "COIN TOSS — YOUR CALL";
+    this.pushHud(true);
+  }
+
+  /** the user calls it in the air; winner receives the opening kickoff */
+  callToss(pick: "heads" | "tails") {
+    if (this.phase !== "toss") return;
+    this.audio.select();
+    const flip: "heads" | "tails" = rng() < 0.5 ? "heads" : "tails";
+    const userWon = flip === pick;
+    this.tossResult = { flip, userWon };
+    // winner receives -> the LOSER kicks off, so possession starts with the kicker
+    const receiving: Team = userWon ? this.userTeam : this.userTeam === "home" ? "away" : "home";
+    this.kickingTeam = receiving === "home" ? "away" : "home";
+    this.message = `${flip.toUpperCase()} — ${userWon ? "YOU" : "CPU"} RECEIVE`;
+    this.pushHud(true);
+    this.openingKickoff = true;
+  }
+
+  /** React polls this to render the toss screen */
+  tossState() {
+    return this.tossResult;
+  }
+  /** the user taps through the toss result into the opening kickoff */
+  startFromToss() {
+    if (this.phase !== "toss" || !this.openingKickoff) return;
+    this.openingKickoff = false;
+    this.startKickoff(this.kickingTeam);
   }
 
   /** React calls this when the user picks a play (formation + play). */
@@ -759,6 +788,13 @@ export class Game {
     // point (that's what makes a kick blockable), except the deep men, who stay
     // back to field the punt / handle a miss.
     const k = this.offPlay.kind;
+    if (k === "kickoff") {
+      // the RETURN team: a wall holds up front, the deep men field the kick
+      for (const d of defenders) {
+        d.job = d.id.endsWith("_RET") || d.defRole === "S" ? "zone" : "man";
+      }
+      return;
+    }
     if (k === "fg" || k === "pat" || k === "punt") {
       for (const d of defenders) {
         const deep = d.id.endsWith("_RET") || (k === "punt" && d.defRole === "S");
@@ -999,6 +1035,170 @@ export class Game {
     }
   }
 
+  // ---- kickoff ------------------------------------------------------------
+  /** Set up and play an actual KICKOFF: the kicking team lines up across its own
+   * 35, the return team fields it and runs it back. Not a teleport to the 25. */
+  private startKickoff(kicking: Team) {
+    this.kickingTeam = kicking;
+    this.possession = kicking; // the kicking team has the ball until it's fielded
+    this.kickReturn = true;
+    this.down = 1;
+    this.toGo = 10;
+    const dir = this.offDir();
+    this.los = clamp(
+      (dir > 0 ? LEFT_GOAL : RIGHT_GOAL) + dir * 35 * YARD,
+      LEFT_GOAL,
+      RIGHT_GOAL
+    );
+    this.recomputeFirstDown();
+    this.offFormation = OFFENSE_FORMATIONS.find((f) => f.id === "kickoffunit")!;
+    this.offPlay = this.offFormation.plays[0];
+    this.defFormation = DEFENSE_FORMATIONS.find((f) => f.id === "kickreturn")!;
+    this.defPlay = this.defFormation.plays[0];
+    this.setupFormation();
+    this.phase = "live";
+    this.liveTime = 0;
+    this.message = "KICKOFF";
+    // the ball is teed up and struck after the kicker's approach
+    const b = this.ball;
+    const tee = this.byId(`${kicking}_CEN`);
+    b.carrier = null;
+    b.targetId = null;
+    b.tip = false;
+    b.fumble = false;
+    b.deadBall = false;
+    b.offTarget = false;
+    b.swatDone = false;
+    b.inAir = false;
+    b.x = b.sx = tee ? tee.x : this.los;
+    b.y = b.sy = WORLD_H / 2;
+    b.z = 0;
+    b.t = 0;
+    b.elapsed = 0;
+    this.kickMode = null;
+    this.kickoffWait = 0.7; // the approach, then it's struck
+    this.setControlFlags();
+    this.pushHud(true);
+  }
+
+  /** strike the kickoff: a high, deep ball toward the return team's goal */
+  private launchKickoff() {
+    const b = this.ball;
+    const dir = this.offDir();
+    const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
+    const kic = this.kickerRating();
+    const yds = 58 + (kic - 75) * 0.25 + rng() * 8;
+    let landX = b.sx + dir * yds * YARD;
+    // don't sail it clean out of the world
+    landX = clamp(landX, LEFT_GOAL - 8 * YARD, RIGHT_GOAL + 8 * YARD);
+    b.sx = b.x;
+    b.sy = b.y;
+    b.tx = landX;
+    b.ty = clamp(WORLD_H / 2 + (rng() - 0.5) * 8 * YARD, SIDELINE, WORLD_H - SIDELINE);
+    b.peak = 5 * YARD; // kickoffs are HIGH — that's the coverage's hang time
+    b.ftime = Math.max(1.2, (Math.abs(b.tx - b.sx) / KICK_SPEED) * 1.35);
+    b.elapsed = 0;
+    b.t = 0;
+    b.inAir = true;
+    this.kickMode = "kickoff";
+    this.audio.kick();
+    void goalX;
+  }
+
+  /** the kickoff in flight: the return team fields it, or it's a touchback */
+  private updateKickoff(dt: number) {
+    const b = this.ball;
+    b.elapsed += dt;
+    b.t = clamp(b.elapsed / b.ftime, 0, 1);
+    b.x = lerp(b.sx, b.tx, b.t);
+    b.y = lerp(b.sy, b.ty, b.t);
+    b.z = b.peak * Math.sin(Math.PI * b.t);
+    const dir = this.offDir();
+    const goalX = dir > 0 ? RIGHT_GOAL : LEFT_GOAL;
+    const inEndZone = dir > 0 ? b.x >= goalX : b.x <= goalX;
+
+    // a returner under the ball fields it and the return is ON
+    if (b.z <= REACH) {
+      let best: Player | null = null;
+      let bd = CATCH_R * 2.2;
+      for (const p of this.players) {
+        if (p.team === this.possession) continue; // the coverage team can't field it
+        if (p.stun > 0) continue;
+        const d = dist(p.x, p.y, b.x, b.y);
+        if (d < bd) {
+          bd = d;
+          best = p;
+        }
+      }
+      if (best) {
+        if (inEndZone) return this.touchback(); // fair decision: take the 25
+        return this.fieldKickoff(best);
+      }
+    }
+    if (b.t >= 1) {
+      // hit the turf untouched
+      if (inEndZone) return this.touchback();
+      const near = this.nearestReturner(b.x, b.y);
+      if (near) return this.fieldKickoff(near);
+      return this.touchback();
+    }
+  }
+
+  private nearestReturner(x: number, y: number) {
+    let best: Player | null = null;
+    let bd = Infinity;
+    for (const p of this.players) {
+      if (p.team === this.possession) continue;
+      const d = dist(p.x, p.y, x, y);
+      if (d < bd) {
+        bd = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  /** he's got it — possession flips and the RETURN is live */
+  private fieldKickoff(r: Player) {
+    const b = this.ball;
+    this.kickMode = null;
+    b.inAir = false;
+    b.z = 0;
+    this.possession = r.team; // the return team now owns the ball
+    r.hasBall = true;
+    b.carrier = r.id;
+    this.message = "RETURN!";
+    this.audio.catchBall();
+    // re-aim everyone: the coverage team now tackles, the return team blocks
+    this.assignDefense(
+      this.possession,
+      this.possession === "home" ? "away" : "home",
+      this.offDir(),
+      WORLD_H / 2
+    );
+    if (this.userOnOffense()) this.controlledId = r.id;
+    else this.controlledId = this.pickDefaultDefender(this.possession === "home" ? "away" : "home");
+    this.setControlFlags();
+  }
+
+  /** kick into the end zone, not brought out: ball at the 25 */
+  private touchback() {
+    const b = this.ball;
+    this.kickMode = null;
+    b.inAir = false;
+    b.z = 0;
+    this.kickReturn = false;
+    const receiving: Team = this.possession === "home" ? "away" : "home";
+    this.possession = receiving;
+    const dir = this.offDir();
+    const ownGoal = dir > 0 ? LEFT_GOAL : RIGHT_GOAL;
+    this.phase = "dead";
+    this.deadTimer = 1.4;
+    this.message = "TOUCHBACK";
+    this.audio.whistle();
+    this.setNewSeries(ownGoal + dir * 25 * YARD);
+  }
+
   // ---- special teams -----------------------------------------------------
   /** the man who receives the snap: the HOLDER on a place kick, the PUNTER
    * himself on a punt (no holder — it's snapped straight back to him). */
@@ -1145,7 +1345,7 @@ export class Game {
    * attacks is the real strike point, not a ball lying on the ground. */
   private updateKickOp(dt: number) {
     const b = this.ball;
-    const kind = this.kickMode!;
+    const kind = this.kickMode as "fg" | "punt" | "pat";
     const catcher = this.snapCatcher();
     this.kickOpT += dt;
     // the man receiving the snap is PLANTED at the spot — he can't be jostled
@@ -2649,6 +2849,16 @@ export class Game {
   // ---- ball update -------------------------------------------------------
   private updateBall(dt: number) {
     const b = this.ball;
+    if (this.kickMode === "kickoff") {
+      this.updateKickoff(dt);
+      return;
+    }
+    // teed up, kicker approaching — strike it when the approach finishes
+    if (this.kickoffWait > 0) {
+      this.kickoffWait -= dt;
+      if (this.kickoffWait <= 0) this.launchKickoff();
+      return;
+    }
     if (this.kickMode) {
       // the snap→hold→strike operation runs until the ball actually leaves the foot
       if (!b.inAir) {
@@ -3383,6 +3593,16 @@ export class Game {
     this.audio.whistle();
     const dir = this.offDir();
 
+    // a KICKOFF RETURN doesn't advance a down — the return team simply takes
+    // over first-and-ten wherever he was brought down
+    if (this.kickReturn) {
+      this.kickReturn = false;
+      const spot = clamp(res.spotX ?? this.los, LEFT_GOAL, RIGHT_GOAL);
+      this.setNewSeries(spot);
+      this.message = "1ST & 10";
+      return;
+    }
+
     if (res.type === "turnover") {
       // interception: other team takes over at the spot, attacking the other way
       const spot = clamp(res.spotX ?? this.los, LEFT_GOAL, RIGHT_GOAL);
@@ -3471,6 +3691,14 @@ export class Game {
    *  "keep" = possession was already set (safety free kick). A typed flag —
    *  this used to be decided by comparing this.message to "SAFETY!". */
   private pendingKickoff: "flip" | "keep" | null = null;
+  private tossResult: { flip: "heads" | "tails"; userWon: boolean } | null = null;
+  private openingKickoff = false;
+  private kickingTeam: Team = "away";
+  /** this play is a KICKOFF RETURN: it ends in a fresh series for the returner's
+   *  team at the spot, not in down-and-distance bookkeeping */
+  private kickReturn = false;
+  /** seconds until the teed kickoff is struck */
+  private kickoffWait = 0;
 
   private afterPlay() {
     if (this.quarter > 4) {
@@ -3495,12 +3723,13 @@ export class Game {
       return;
     }
     if (this.pendingKickoff) {
-      // simple "kickoff": receiving team starts at own 25
+      // after a score, the team that just scored KICKS OFF — a real played
+      // kickoff now, not a teleport to the receiving team's 25
       if (this.pendingKickoff === "flip") this.flipForKick();
       this.pendingKickoff = null;
-      const dir = this.possession === "home" ? 1 : -1;
-      const ownGoal = dir > 0 ? LEFT_GOAL : RIGHT_GOAL;
-      this.setNewSeries(ownGoal + dir * 25 * YARD);
+      // `possession` is the RECEIVING team here; the scorer kicks
+      this.startKickoff(this.possession === "home" ? "away" : "home");
+      return;
     }
     this.message =
       this.down === 1

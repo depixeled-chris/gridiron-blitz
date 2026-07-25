@@ -712,3 +712,54 @@ body {
   background: linear-gradient(180deg, #ff8a5c, #e2562f);
   color: #fff;
 }
+
+/* ---- coin toss ------------------------------------------------------- */
+.toss {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 10, 20, 0.72);
+  z-index: 20;
+}
+.toss-card {
+  background: linear-gradient(180deg, #18233f, #0f1830);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: clamp(16px, 3vh, 28px) clamp(20px, 4vw, 40px);
+  text-align: center;
+  color: #eef2fb;
+  min-width: min(88vw, 360px);
+}
+.toss-title { font-weight: 800; letter-spacing: 0.14em; font-size: clamp(16px, 2.6vh, 22px); }
+.toss-sub { opacity: 0.8; margin-top: 6px; font-size: clamp(12px, 1.9vh, 15px); }
+.toss-elect { margin-top: 4px; color: #ffe600; font-weight: 700; font-size: clamp(13px, 2vh, 16px); }
+.toss-btns { display: flex; gap: 12px; justify-content: center; margin-top: 14px; }
+.toss-btn {
+  flex: 1 1 0;
+  padding: clamp(10px, 1.8vh, 14px) 18px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #23325c;
+  color: #eef2fb;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.toss-btn.wide { width: 100%; margin-top: 14px; background: #2a6df4; }
+.toss-coin {
+  width: 74px; height: 74px; margin: 14px auto 8px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 34% 30%, #ffe9a3, #d9a520 62%, #9c7414);
+  color: #4a3402;
+  font-weight: 900;
+  font-size: 34px;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+}
+.toss-coin.spun { animation: tossflip 0.65s ease-out 1; }
+@keyframes tossflip {
+  0% { transform: rotateX(0deg) scale(0.7); }
+  100% { transform: rotateX(1080deg) scale(1); }
+}

@@ -4,6 +4,7 @@ import type { HudState } from "./game/types";
 import { Scoreboard } from "./ui/Scoreboard";
 import { PlayCall } from "./ui/PlayCall";
 import { Menu } from "./ui/Menu";
+import { CoinToss } from "./ui/CoinToss";
 import { GameOver } from "./ui/GameOver";
 import { Controls } from "./ui/Controls";
 import { TouchControls } from "./ui/TouchControls";
@@ -102,6 +103,13 @@ export function App() {
         )}
 
         {hud.phase === "menu" && <Menu onStart={() => game?.startGame()} />}
+        {hud.phase === "toss" && game && (
+          <CoinToss
+            result={game.tossState()}
+            onCall={(pick) => game.callToss(pick)}
+            onContinue={() => game.startFromToss()}
+          />
+        )}
         {hud.phase === "playcall" && game && (
           <PlayCall
             formations={game.availableFormations()}

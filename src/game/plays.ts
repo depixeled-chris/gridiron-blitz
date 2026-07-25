@@ -204,7 +204,16 @@ const PUNT_ALIGN = {
   QB: { fwd: -13, lat: 0 }, // PUNTER — catches the long snap and kicks it
 };
 
+const KICKOFF_ALIGN = {
+  CEN: { fwd: 0, lat: -1 }, LG: { fwd: 0, lat: -3.5 }, LT: { fwd: 0, lat: -6 },
+  RG: { fwd: 0, lat: 1.5 }, RT: { fwd: 0, lat: 4 },
+  C: { fwd: 0, lat: -8.5 }, F: { fwd: 0, lat: 6.5 },
+  A: { fwd: 0, lat: -11 }, B: { fwd: 0, lat: 9 }, R: { fwd: 0, lat: 11 },
+  QB: { fwd: -4, lat: 0 }, // the KICKER, running up to the tee
+};
+
 const SPECIAL: Record<string, OffensePlay> = {
+  kickoff: { id: "kickoff", name: "KICKOFF", kind: "kickoff", align: KICKOFF_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
   punt: { id: "punt", name: "PUNT", kind: "punt", align: PUNT_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
   fieldgoal: { id: "fieldgoal", name: "FIELD GOAL", kind: "fg", align: PLACE_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
   xp: { id: "xp", name: "EXTRA POINT", kind: "pat", align: PLACE_ALIGN, routes: { A: [], B: [], C: [], R: [] } },
@@ -266,6 +275,11 @@ export const OFFENSE_FORMATIONS: OffenseFormation[] = [
     id: "placekick", name: "PLACE KICK", tag: "FG / PAT",
     align: PLACE_ALIGN,
     plays: [SPECIAL.fieldgoal, SPECIAL.xp],
+  },
+  {
+    id: "kickoffunit", name: "KICKOFF", tag: "KICK OFF",
+    align: KICKOFF_ALIGN,
+    plays: [SPECIAL.kickoff],
   },
   {
     id: "puntunit", name: "PUNT UNIT", tag: "PUNT",
@@ -451,6 +465,18 @@ export const DEFENSE_FORMATIONS: DefenseFormation[] = [
       D("CB1", "CB", 5, -11, 24), D("CB2", "CB", 5, 11, 21),
     ],
     plays: ST_BLOCK_MENU,
+  },
+  {
+    // KICK RETURN: a blocking wall at the 20-ish with a RETURNER deep to field it
+    id: "kickreturn", name: "KICK RETURN", tag: "VS KICKOFF",
+    front: [
+      D("DE1", "DL", 12, -9, 91), D("DT1", "DL", 12, -5, 94), D("DT2", "DL", 12, -1, 98),
+      D("DE2", "DL", 12, 3, 56), D("WLB", "LB", 12, 7, 54), D("SLB", "LB", 12, 11, 58),
+      D("MLB", "LB", 22, -5, 52), D("FS", "S", 22, 0, 31), D("SS", "S", 22, 5, 33),
+      D("CB1", "CB", 34, -4, 24),
+      D("RET", "S", 52, 0, 15), // the RETURNER — fields the kick and runs it back
+    ],
+    plays: ST_RETURN_MENU,
   },
   {
     // PUNT RETURN: a light rush, jammers on the gunners, and a RETURNER deep.
